@@ -1,0 +1,6 @@
+{
+  "name": "Copy of Classroom Quiz App",
+  "description": "An interactive quiz application for students from grades 1 to 12. Administrators can add and manage questions, while students can test their knowledge and see their scores.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
