@@ -19,13 +19,15 @@ export type QuizView =
   | 'student_study_guide'
   | 'student_billing'
   | 'teacher_exam_generator'
-  | 'teacher_exam_preview';
+  | 'teacher_exam_preview'
+  | 'subscription_success';
 
 export interface UserPermissions {
   user_id: string;
   allowed_languages: Language[];
   allowed_grades: number[];
   subject_access: { [subjectId: string]: string } | null;
+  is_premium?: boolean;
   role?: string;
 }
 

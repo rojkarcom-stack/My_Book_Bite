@@ -3,6 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { QuizService } from '../../services/quiz.service';
 import { TranslationService } from '../../services/translation.service';
 import { PerformanceService } from '../../services/performance.service';
+import { SupabaseService } from '../../services/supabase.service';
 import { Chart } from 'chart.js/auto';
 import { Badge, FocusArea } from '../../models';
 
@@ -25,7 +26,7 @@ interface DisplayBadge extends Badge {
           {{ t.translate('student.progressDashboard') }}
         </h1>
         <p class="text-sm font-medium text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
-          Monitor your accomplishments, identify focus topics, and review historic test results.
+          {{ t.translate('student.dashboardDesc') || 'Monitor your accomplishments, identify focus topics, and review historic test results.' }}
         </p>
       </div>
       <div class="flex items-center gap-4 w-full md:w-auto">
@@ -43,6 +44,91 @@ interface DisplayBadge extends Badge {
         </button>
       </div>
     </div>
+
+    <!-- Student Profile & Membership Status Strip -->
+    <div class="mt-6 pt-6 border-t border-slate-100 dark:border-slate-700/60 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-full bg-slate-100 dark:bg-slate-900 flex items-center justify-center font-black text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-800 text-lg uppercase tracking-tight shadow-inner">
+          {{ currentUser()?.email?.charAt(0) || 'S' }}
+        </div>
+        <div>
+          <span class="block text-sm font-extrabold text-slate-800 dark:text-slate-100 leading-tight">{{ currentUser()?.email }}</span>
+          <span class="block text-xs font-semibold text-slate-400 mt-0.5 leading-none">{{ t.translate('student.registeredAccount') || 'Student Profile' }}</span>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 items-center">
+        <!-- Grade Allowance & Access Specs -->
+        @if (quizService.selectedGrade()) {
+          <span class="text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 text-slate-500 dark:text-slate-400 border border-slate-200/40 dark:border-slate-700/40">
+            {{ t.translate('grade') || 'Grade' }}: {{ quizService.selectedGrade() }}
+          </span>
+        }
+        @if (quizService.selectedLanguage()) {
+          <span class="text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 text-slate-500 dark:text-slate-400 border border-slate-200/40 dark:border-slate-700/40 uppercase">
+            {{ quizService.selectedLanguage() }}
+          </span>
+        }
+
+        <!-- Premium Status Badge -->
+        @if (quizService.hasActiveSubscription()) {
+          <div class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500/10 dark:bg-amber-500/5 text-amber-700 dark:text-amber-400 border border-amber-500/20 font-extrabold text-xs shadow-sm shadow-amber-500/10">
+            <svg class="w-4 h-4 text-amber-500" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24">
+              <path fill-rule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.006 5.404.434c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.434 2.082-5.005Z" clip-rule="evenodd" />
+            </svg>
+            <span>{{ t.translate('student.proActive') || '💎 Pro Account Active' }}</span>
+          </div>
+        } @else {
+          <button (click)="quizService.view.set('student_billing')" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-indigo-50 dark:bg-slate-900 dark:hover:bg-indigo-950/20 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200 dark:border-slate-800 hover:border-indigo-500/20 font-bold text-xs transition duration-200 active:scale-95 shadow-inner">
+            <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+            <span>{{ t.translate('student.freeStandard') || 'Free Standard Account' }}</span>
+            <span class="text-[10px] bg-indigo-600 text-white font-black px-1.5 py-0.5 rounded-md uppercase ml-1 tracking-wider">{{ t.translate('student.upgrade') || 'Upgrade' }}</span>
+          </button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- Pro Token Balance Section -->
+  <div id="pro-token-wallet-card" class="relative overflow-hidden p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-[#4f46e5]/[0.02] via-[#818cf8]/[0.02] to-transparent dark:from-[#312e81]/[0.15] dark:via-slate-900/20 dark:to-transparent border border-indigo-500/15 dark:border-indigo-500/10 shadow-xs hover:shadow-sm duration-350 transition-all flex flex-col md:flex-row items-center justify-between gap-6 group/wallet">
+    <!-- Ambient Blur Background Blobs -->
+    <div class="absolute -top-16 -left-16 w-36 h-36 bg-[#4f46e5]/[0.04] dark:bg-[#818cf8]/[0.08] rounded-full blur-2xl pointer-events-none transition-transform duration-700 group-hover/wallet:scale-110"></div>
+    <div class="absolute -bottom-16 -right-16 w-36 h-36 bg-[#818cf8]/[0.03] dark:bg-[#4f46e5]/[0.05] rounded-full blur-2xl pointer-events-none transition-transform duration-700 group-hover/wallet:scale-110"></div>
+
+    <div class="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left relative z-10 w-full md:w-auto">
+      <div class="w-16 h-16 rounded-2xl bg-white dark:bg-slate-900 border border-indigo-100/80 dark:border-indigo-950/80 shadow-xs flex items-center justify-center text-4xl select-none shrink-0 transition-all duration-300 hover:scale-105 active:scale-95 group-hover/wallet:border-indigo-550/25 md:group-hover/wallet:scale-110">
+        🪙
+      </div>
+      <div>
+         <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-indigo-50/50 dark:bg-indigo-950/40 text-[#4f46e5] dark:text-[#818cf8] border border-indigo-150/50 dark:border-indigo-900/30">
+          💼 {{ t.translate('student.tokenWallet') || 'Learning Wallet' }}
+         </span>
+         <h2 class="text-2xl font-black text-slate-950 dark:text-white leading-tight mt-1.5 flex flex-wrap items-center justify-center sm:justify-start gap-2 tracking-tight">
+          <span>{{ t.translate('student.proTokensCount', { count: quizService.proTokens() }) || (quizService.proTokens() + ' Pro Tokens') }}</span>
+          <span class="text-slate-400 dark:text-slate-500 text-sm font-semibold select-none leading-none pt-0.5">{{ t.translate('student.available') || 'Available' }}</span>
+         </h2>
+         <p class="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-1.5 max-w-xl leading-relaxed font-semibold">
+          {{ t.translate('student.walletDesc') || 'Every 29.9 redeemable tokens unlocks any single grade curriculum forever across all subjects and languages including Arabic and Kurdish.' }}
+         </p>
+       </div>
+     </div>
+     
+     <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto shrink-0 relative z-10 font-[Inter]">
+       @if (quizService.proTokens() > 0) {
+         <button (click)="quizService.view.set('subscription_success')" type="button" class="group/btn w-full sm:w-auto px-6 py-3.5 h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl uppercase tracking-wider shadow-sm hover:shadow-emerald-600/15 active:translate-y-0.5 transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer select-none">
+           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="h-4 w-4 shrink-0 transform group-hover/btn:scale-110 transition-transform duration-150">
+             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 ... 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z" />
+           </svg>
+           {{ t.translate('student.redeemToken') || 'Redeem Token' }}
+         </button>
+       }
+       <button (click)="quizService.view.set('student_billing')" type="button" class="group/btn w-full sm:w-auto px-6 py-3.5 h-12 bg-[#4f46e5] hover:bg-[#4338ca] text-white font-black text-xs rounded-xl uppercase tracking-wider shadow-sm hover:shadow-indigo-620/15 active:translate-y-0.5 transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer select-none">
+         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="h-4 w-4 shrink-0 transform group-hover/btn:translate-x-0.5 transition-transform duration-150">
+           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+         </svg>
+         {{ t.translate('student.addProTokens') || 'Add Pro Tokens' }}
+       </button>
+    </div>
   </div>
   
   @if (isLoading()) {
@@ -51,7 +137,9 @@ interface DisplayBadge extends Badge {
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
       </svg>
-      <span class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-4">Loading Dashboard Analytics...</span>
+      <span class="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-4">
+        {{ t.translate('student.loadingDashboardAnalytics') || 'Loading Dashboard Analytics...' }}
+      </span>
     </div>
   } @else if (pastQuizzes().length > 0) {
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -141,7 +229,7 @@ interface DisplayBadge extends Badge {
           <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100 font-heading mb-4">{{ t.translate('student.achievements') }}</h2>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
             @for(badge of displayBadges(); track badge.id) {
-              <div class="group flex flex-col items-center p-5 rounded-2xl border border-slate-150 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-900/30 hover:border-indigo-500/20 transition-all duration-200" 
+              <div class="group flex flex-col items-center p-5 rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-slate-50/50 dark:bg-slate-900/30 hover:border-indigo-500/20 transition-all duration-200" 
                    [title]="t.translate(badge.nameKey) + '\\n' + t.translate(badge.descriptionKey)">
                 <div class="relative mb-3 group-hover:scale-110 transition-transform">
                   <svg xmlns="http://www.w3.org/2000/svg" class="h-14 w-14 transition-all" 
@@ -201,7 +289,9 @@ interface DisplayBadge extends Badge {
         </svg>
       </div>
       <h3 class="text-lg font-bold text-slate-800 dark:text-slate-100 font-heading">{{ t.translate('student.noHistory') }}</h3>
-      <p class="mt-2 text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto">Complete your first assessment to unlock detailed dashboard analysis and performance graphs.</p>
+      <p class="mt-2 text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+        {{ t.translate('student.noHistoryDesc') || 'Complete your first assessment to unlock detailed dashboard analysis and performance graphs.' }}
+      </p>
       <div class="mt-6">
         <button type="button" (click)="quizService.changeGrade()" class="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl shadow-md shadow-indigo-500/20 active:translate-y-0.5 hover:-translate-y-0.5 transition-all text-sm">
           {{ t.translate('student.selectASubject') }}
@@ -218,6 +308,9 @@ export class StudentDashboardComponent implements AfterViewInit, OnDestroy {
   quizService = inject(QuizService);
   t = inject(TranslationService);
   performanceService = inject(PerformanceService);
+  supabase = inject(SupabaseService);
+
+  currentUser = this.supabase.currentUser;
 
   pastQuizzes = this.performanceService.pastQuizzes;
   isLoading = this.performanceService.isLoading;

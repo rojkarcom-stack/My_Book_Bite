@@ -38,7 +38,7 @@ import { TranslationService } from '../../services/translation.service';
           </svg>
         </div>
         <span class="block font-bold text-xl text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors font-heading">{{ t.translate('student.scientific') }}</span>
-        <span class="block text-sm text-slate-400 dark:text-slate-500 mt-2 font-medium">Mathematics, Physics, Chemistry, Biology and general scientific methodologies.</span>
+        <span class="block text-sm text-slate-400 dark:text-slate-500 mt-2 font-medium">{{ t.translate('student.scientificDesc') || 'Mathematics, Physics, Chemistry, Biology and general scientific methodologies.' }}</span>
       </button>
 
       <!-- Literary Branch -->
@@ -49,7 +49,7 @@ import { TranslationService } from '../../services/translation.service';
           </svg>
         </div>
         <span class="block font-bold text-xl text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors font-heading">{{ t.translate('student.literary') }}</span>
-        <span class="block text-sm text-slate-400 dark:text-slate-500 mt-2 font-medium">Literature, History, Philosophy, Social Sciences and linguistic fields.</span>
+        <span class="block text-sm text-slate-400 dark:text-slate-500 mt-2 font-medium">{{ t.translate('student.literaryDesc') || 'Literature, History, Philosophy, Social Sciences and linguistic fields.' }}</span>
       </button>
 
     </div>

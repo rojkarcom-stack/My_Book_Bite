@@ -3,6 +3,7 @@ import { Injectable, signal, computed, inject, effect, OnDestroy } from '@angula
 import { QuizView, Language, Subject, Chapter, Subchapter, Question, QuizResult, UserPermissions, StudyGuide } from '../models';
 import { SupabaseService } from './supabase.service';
 import { TranslationService } from './translation.service';
+import { ToastService } from './toast.service';
 
 @Injectable({
   providedIn: 'root',
@@ -10,6 +11,8 @@ import { TranslationService } from './translation.service';
 export class QuizService implements OnDestroy {
   private supabase = inject(SupabaseService);
   private t = inject(TranslationService);
+  private toast = inject(ToastService);
+  private isFetchingPermissions = false;
 
   // App state
   view = signal<QuizView>('language_select');
@@ -17,6 +20,7 @@ export class QuizService implements OnDestroy {
   coreDataLoadError = signal<string|null>(null);
   theme = signal<'light' | 'dark' | 'system'>('system');
   isQuotaExceeded = signal<boolean>(false); // Supabase doesn't have the same quota limits
+  sessionUnlock = signal<Language | 'all_subjects' | boolean>(false); // Immediate session-only unlock after payment (can be specific Language, all_subjects, or boolean)
 
   // Core Data - now centralized here
   allSubjects = signal<Subject[]>([]);
@@ -39,6 +43,12 @@ export class QuizService implements OnDestroy {
   selectedChapter = signal<Chapter | null>(null);
   selectedSubchapter = signal<Subchapter | null>(null);
   userPermissions = signal<UserPermissions | null>(null);
+
+  proTokens = computed(() => {
+    const permissions = this.userPermissions();
+    if (!permissions || !permissions.subject_access) return 0;
+    return Number(permissions.subject_access['tokens_balance'] || 0);
+  });
 
   // Data for selectors
   subjectsForSelectedGrade = signal<Subject[]>([]);
@@ -79,12 +89,20 @@ export class QuizService implements OnDestroy {
   });
 
   hasActiveSubscription = computed(() => {
-    if (this.isAdmin()) {
+    if (this.isAdmin() || this.sessionUnlock()) {
       return true;
     }
 
     const permissions = this.userPermissions();
-    if (!permissions?.subject_access) {
+    if (!permissions) {
+      return false;
+    }
+
+    if (permissions.is_premium) {
+      return true;
+    }
+    
+    if (!permissions.subject_access) {
       return false;
     }
     const now = new Date();
@@ -98,12 +116,40 @@ export class QuizService implements OnDestroy {
   });
 
   allowedSubjectIds = computed(() => {
-    if (this.isAdmin()) {
-      return new Set(this.allSubjects().map(s => s.id));
+    const permissions = this.userPermissions();
+    
+    // Check if the user has full premium or unrestricted access
+    const hasFullAccess = this.isAdmin() || 
+                          this.sessionUnlock() === true || 
+                          this.sessionUnlock() === 'all_subjects' || 
+                          permissions?.is_premium === true;
+
+    if (hasFullAccess) {
+      const allowedSet = new Set<string>();
+      if (this.allSubjects().length > 0) {
+        this.allSubjects().forEach(s => allowedSet.add(s.id));
+      }
+      const selSubject = this.selectedSubject();
+      if (selSubject) {
+        allowedSet.add(selSubject.id);
+      }
+      // Override has to always return true to gracefully handle any lag or lazy loading in core subjects
+      allowedSet.has = (id: string) => true;
+      return allowedSet;
     }
       
-    const permissions = this.userPermissions();
     const allowed = new Set<string>();
+
+    // Local session unlock for a specific language
+    const sessionUnlockValue = this.sessionUnlock();
+    if (sessionUnlockValue && typeof sessionUnlockValue === 'string') {
+      this.allSubjects().forEach(s => {
+        if (s.language === sessionUnlockValue) {
+          allowed.add(s.id);
+        }
+      });
+    }
+
     if (!permissions?.subject_access) {
         return allowed;
     }
@@ -120,12 +166,49 @@ export class QuizService implements OnDestroy {
   private mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
   constructor() {
-    this.loadTheme();
+    this.loadPersistedState();
     this.updateThemeClass(); // Apply theme immediately on startup
     
     // This new effect will notify TranslationService of language changes
     effect(() => {
         this.t.setLanguage(this.selectedLanguage());
+        if (this.selectedLanguage()) {
+          localStorage.setItem('quizAppLanguage', this.selectedLanguage()!);
+        } else {
+          localStorage.removeItem('quizAppLanguage');
+        }
+    });
+
+    effect(() => {
+      const currentView = this.view();
+      // Only persist non-ephemeral views
+      const ephemeralViews: QuizView[] = ['student_quiz', 'student_results', 'teacher_exam_preview'];
+      if (!ephemeralViews.includes(currentView)) {
+        localStorage.setItem('quizAppView', currentView);
+      }
+
+      // Sync with browser history for the back button
+      if (history.state?.view !== currentView) {
+        history.pushState({ view: currentView }, '');
+      }
+    });
+
+    effect(() => {
+      const grade = this.selectedGrade();
+      if (grade !== null) {
+        localStorage.setItem('quizAppGrade', grade.toString());
+      } else {
+        localStorage.removeItem('quizAppGrade');
+      }
+    });
+
+    effect(() => {
+      const branch = this.selectedBranch();
+      if (branch) {
+        localStorage.setItem('quizAppBranch', branch);
+      } else {
+        localStorage.removeItem('quizAppBranch');
+      }
     });
     
     effect(() => {
@@ -164,28 +247,151 @@ export class QuizService implements OnDestroy {
       }
     });
 
+    // Run checkout check immediately on initial load of the service
+    this.checkCheckoutSuccess();
+
     // Data loading effect - only handles fetching when user changes
     effect(() => {
       const user = this.supabase.currentUser();
       
       if (user) {
-        // Only fetch if not already loaded for this user
-        if (!this.userPermissions() || this.userPermissions()?.user_id !== user.id) {
+        // Safe asynchronous check of query parameters once authenticated
+        this.checkCheckoutSuccess();
+
+        // Only fetch if not already loaded for this user, and we're not already fetching it
+        if ((!this.userPermissions() || this.userPermissions()?.user_id !== user.id) && !this.isFetchingPermissions) {
+          this.isFetchingPermissions = true;
           this.fetchUserPermissions(user.id).then(() => {
+            this.isFetchingPermissions = false;
             if (this.allSubjects().length === 0) {
               this.loadCoreData();
             }
+          }).catch((err) => {
+            this.isFetchingPermissions = false;
+            console.error('Error in fetching permissions promise chain:', err);
           });
         }
       } else {
         this.userPermissions.set(null);
         this.clearCoreData();
+        this.isFetchingPermissions = false;
       }
     });
   }
 
+  async activatePurchase(languageOrAll: string, gradeSelection?: { grade: number; language: string; branch?: string | null }) {
+    const user = this.supabase.currentUser();
+    if (user) {
+      if (gradeSelection) {
+        this.sessionUnlock.set(gradeSelection.language as Language);
+      } else {
+        const lang = languageOrAll as Language;
+        if (['ku_sorani', 'ku_badini', 'ar', 'en'].includes(languageOrAll)) {
+          this.sessionUnlock.set(lang);
+        } else {
+          this.sessionUnlock.set(true);
+        }
+      }
+      this.view.set('student_dashboard');
+      await this.activatePurchaseOnBackend(user.id, languageOrAll, gradeSelection);
+    }
+  }
+
   ngOnDestroy() {
     this.mediaQuery.removeEventListener('change', this.updateThemeClass);
+  }
+
+  private checkCheckoutSuccess() {
+    const params = new URLSearchParams(window.location.search);
+    const cleanPath = window.location.pathname.replace(/\/$/, '');
+    const isSuccessPath = cleanPath === '/payment-success' || cleanPath === '/success';
+    if (params.get('checkout_success') === 'true' || isSuccessPath) {
+      const purchasedLanguage = params.get('purchased_language') as Language | null;
+
+      // Immediate session unlock for better UX
+      if (purchasedLanguage) {
+        this.sessionUnlock.set(purchasedLanguage);
+      } else {
+        this.sessionUnlock.set(true);
+      }
+      
+      // Navigate to success page automatically
+      this.view.set('subscription_success');
+
+      // Customize success toast based on unlocked language
+      let displayLanguage = '';
+      if (purchasedLanguage) {
+        if (purchasedLanguage === 'ku_sorani') displayLanguage = 'Kurdish Sorani';
+        else if (purchasedLanguage === 'ku_badini') displayLanguage = 'Kurdish Badini';
+        else if (purchasedLanguage === 'ar') displayLanguage = 'Arabic';
+        else if (purchasedLanguage === 'en') displayLanguage = 'English';
+      }
+
+      const successMsg = displayLanguage 
+        ? `Payment successful! Premium access for ${displayLanguage} subjects is now active.`
+        : 'Payment successful! Your premium access is now active.';
+
+      // Show success message
+      this.toast.show(successMsg, 'success', 10000);
+      
+      // Clear the query parameters and reset path without refreshing the page
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('checkout_success');
+        url.searchParams.delete('purchased_language');
+        url.searchParams.delete('email');
+        url.searchParams.delete('user_id');
+        const cleanPathname = url.pathname.replace(/\/$/, '');
+        if (cleanPathname === '/payment-success' || cleanPathname === '/success') {
+          url.pathname = '/';
+        }
+        window.history.replaceState({}, '', url.toString());
+      } catch (e) {
+        console.error('Failed to clean up URL:', e);
+      }
+
+      // Persist the purchase in the database immediately
+      const currentUser = this.supabase.currentUser();
+      if (currentUser) {
+        this.activatePurchaseOnBackend(currentUser.id, purchasedLanguage || this.selectedLanguage() || 'all_subjects')
+          .catch((err) => {
+            console.error('Failed to activate purchase on backend:', err);
+          });
+      }
+    }
+  }
+
+  private async activatePurchaseOnBackend(
+    userId: string, 
+    languageOrAll: string, 
+    gradeSelection?: { grade: number; language: string; branch?: string | null }
+  ) {
+    try {
+      const token = await this.supabase.getAccessToken();
+      if (!token) return;
+
+      const bodyPayload = gradeSelection 
+        ? { language: languageOrAll, gradeSelection }
+        : { language: languageOrAll };
+
+      const response = await fetch('/api/billing/activate-purchase', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(bodyPayload)
+      });
+
+      if (response.ok) {
+        console.log(`Successfully activated premium access inside DB`);
+        this.refreshPermissions();
+      } else {
+        console.warn('Backend activation returned non-ok status:', response.status);
+      }
+    } catch (err) {
+      console.error('Error activating purchase on backend:', err);
+    }
   }
 
   private updateThemeClass = () => {
@@ -198,9 +404,38 @@ export class QuizService implements OnDestroy {
     }
   };
 
-  private loadTheme() {
+  private loadPersistedState() {
+    // Load Theme
     const storedTheme = localStorage.getItem('quizAppTheme') as 'light' | 'dark' | 'system' | null;
     this.theme.set(storedTheme || 'system');
+
+    // Load Language
+    const storedLang = localStorage.getItem('quizAppLanguage') as Language | null;
+    if (storedLang) {
+      this.selectedLanguage.set(storedLang);
+    }
+
+    // Load View
+    const storedView = localStorage.getItem('quizAppView') as QuizView | null;
+    if (storedView) {
+      // Ephemeral views are not persisted in the effect, but safety check anyway
+      const ephemeralViews: QuizView[] = ['student_quiz', 'student_results', 'teacher_exam_preview'];
+      if (!ephemeralViews.includes(storedView)) {
+        this.view.set(storedView);
+      }
+    }
+
+    // Load Grade
+    const storedGrade = localStorage.getItem('quizAppGrade');
+    if (storedGrade) {
+      this.selectedGrade.set(parseInt(storedGrade, 10));
+    }
+
+    // Load Branch
+    const storedBranch = localStorage.getItem('quizAppBranch') as 'scientific' | 'literary' | null;
+    if (storedBranch) {
+      this.selectedBranch.set(storedBranch);
+    }
   }
 
   async loadManagedUsers(limitCount: number = 50) {
@@ -212,12 +447,70 @@ export class QuizService implements OnDestroy {
         email: user.email || user.id,
         totalQuizzes: 0,
         averageScore: 0,
-        lastActivity: null
+        lastActivity: null,
+        is_admin: !!user.is_admin,
+        is_premium: !!(user.user_permissions?.is_premium || user.plan === 'premium' || user.plan === 'pro')
       }));
       this.allManagedUsers.set(managedUsers);
     } catch (error) {
       console.error("Failed to load managed users", error);
     }
+  }
+
+  async manuallyCreateUser(payload: {
+    email: string;
+    password?: string;
+    allowedLanguages?: string[];
+    allowedGrades?: number[];
+    role?: 'student' | 'teacher' | 'admin';
+    isAdminUser?: boolean;
+  }) {
+    const response = await this.supabase.manuallyCreateUser(payload);
+    if (response && response.success) {
+      const newUser = {
+        id: response.user.id,
+        email: response.user.email,
+        totalQuizzes: 0,
+        averageScore: 0,
+        lastActivity: null,
+        is_admin: !!response.user.is_admin
+      };
+      this.allManagedUsers.update(users => [newUser, ...users]);
+    }
+    return response;
+  }
+
+  async manuallyUpdateUser(payload: {
+    targetUserId: string;
+    password?: string;
+    allowedLanguages?: string[];
+    allowedGrades?: number[];
+    role?: 'student' | 'teacher' | 'admin';
+    isAdminUser?: boolean;
+    isPremium?: boolean;
+  }) {
+    const response = await this.supabase.manuallyUpdateUser(payload);
+    if (response && response.success) {
+      this.allManagedUsers.update(users => users.map(user => {
+        if (user.id === payload.targetUserId) {
+          return {
+            ...user,
+            is_admin: payload.isAdminUser !== undefined ? !!payload.isAdminUser : (payload.role ? payload.role === 'admin' : user.is_admin),
+            is_premium: payload.isPremium !== undefined ? !!payload.isPremium : user.is_premium
+          };
+        }
+        return user;
+      }));
+    }
+    return response;
+  }
+
+  async manuallyDeleteUser(userId: string) {
+    const response = await this.supabase.manuallyDeleteUser(userId);
+    if (response && response.success) {
+      this.allManagedUsers.update(users => users.filter(user => user.id !== userId));
+    }
+    return response;
   }
 
   async searchManagedUsers(email: string) {
@@ -235,7 +528,8 @@ export class QuizService implements OnDestroy {
         email: user.email || user.id,
         totalQuizzes: 0,
         averageScore: 0,
-        lastActivity: null
+        lastActivity: null,
+        is_admin: !!user.is_admin
       }));
       
       this.allManagedUsers.update(all => {
@@ -447,7 +741,10 @@ export class QuizService implements OnDestroy {
   }
 
   // --- Data fetching methods ---
-  async loadCoreData() {
+  async loadCoreData(force: boolean = false) {
+    if (force) {
+      this.clearCoreData();
+    }
     if (this.allSubjects().length > 0) return;
     this.isLoading.set(true);
     this.coreDataLoadError.set(null);
@@ -577,18 +874,25 @@ export class QuizService implements OnDestroy {
       }
   }
 
-  async fetchQuestionsForSubchapter(subchapterId: string) {
+  async fetchQuestionsForSubchapter(subchapterId: string, force: boolean = false) {
     // Check if we already have questions for this subchapter
-    const existing = this.allQuestions().filter(q => q.subchapter_id === subchapterId);
-    if (existing.length > 0) return;
+    if (!force) {
+      const existing = this.allQuestions().filter(q => q.subchapter_id === subchapterId);
+      if (existing.length > 0) return;
+    }
 
     this.isLoadingQuestions.set(true);
     try {
       const fetchedQuestions = await this.supabase.getQuestions(subchapterId);
       this.allQuestions.update(all => {
-        const existingIds = new Set(all.map(q => q.id));
-        const newOnes = fetchedQuestions.filter(q => !existingIds.has(q.id));
-        return [...all, ...newOnes];
+        if (force) {
+          const filtered = all.filter(q => q.subchapter_id !== subchapterId);
+          return [...filtered, ...fetchedQuestions];
+        } else {
+          const existingIds = new Set(all.map(q => q.id));
+          const newOnes = fetchedQuestions.filter(q => !existingIds.has(q.id));
+          return [...all, ...newOnes];
+        }
       });
     } catch (error) {
       console.error('Error fetching questions:', error);
@@ -620,15 +924,21 @@ export class QuizService implements OnDestroy {
     this.fetchStudyGuideForSubchapter(subchapter.id);
   }
 
-  async fetchStudyGuideForSubchapter(subchapterId: string) {
+  async fetchStudyGuideForSubchapter(subchapterId: string, force: boolean = false) {
     const existing = this.allStudyGuides().find(g => g.subchapter_id === subchapterId);
-    if (existing) return;
+    if (existing && !force) return;
 
     this.isLoadingStudyGuide.set(true);
     try {
       const guide = await this.supabase.getStudyGuideBySubchapterId(subchapterId);
       if (guide) {
-        this.allStudyGuides.update(all => [...all, guide]);
+        this.allStudyGuides.update(all => {
+          const exists = all.find(g => g.subchapter_id === subchapterId);
+          if (exists) {
+            return all.map(g => g.subchapter_id === subchapterId ? guide : g);
+          }
+          return [...all, guide];
+        });
       }
     } catch (error) {
       console.error('Error fetching study guide:', error);
@@ -705,6 +1015,9 @@ export class QuizService implements OnDestroy {
         case 'student_results':
              this.view.set('student_topic_selector');
              break;
+        case 'student_billing':
+             this.view.set('student_dashboard');
+             break;
     }
   }
   
@@ -712,7 +1025,12 @@ export class QuizService implements OnDestroy {
     this.isLoading.set(true);
     try {
       await this.supabase.signOut();
-      // The auth guard effect will automatically change the view.
+      this.resetStudentSelections();
+      localStorage.removeItem('quizAppView');
+      localStorage.removeItem('quizAppLanguage');
+      localStorage.removeItem('quizAppGrade');
+      localStorage.removeItem('quizAppBranch');
+      // The auth guard effect will automatically change the view to 'auth'.
     } catch (error: any) {
       console.error('Error signing out:', error);
     } finally {

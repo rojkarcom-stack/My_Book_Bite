@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"ng serve\" \"PORT=3001 node --experimental-strip-types server.ts\"",
-    "build": "ng build",
-    "start": "node --experimental-strip-types server.ts",
+    "dev": "concurrently \"ng serve\" \"BACKEND_PORT=3001 tsx src/server.ts\"",
+    "build": "ng build && mkdir -p dist/payment-success dist/success && cp dist/index.html dist/payment-success/index.html && cp dist/index.html dist/success/index.html",
+    "start": "node server.ts",
     "preview": "ng serve --configuration=production",
     "lint": "ng lint"
   },
@@ -19,19 +19,21 @@
     "@angular/core": "20",
     "@angular/forms": "20",
     "@angular/platform-browser": "20",
+    "@angular/platform-server": "^20.3.25",
+    "@angular/ssr": "^20.3.28",
     "@google/genai": "^1.47.0",
-    "@paddle/paddle-node-sdk": "^3.8.0",
     "@supabase/supabase-js": "^2.103.0",
     "canvas-confetti": "^1.9.4",
     "chart.js": "^4.5.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
-    "ngx-quill": "^29.0.1",
+    "ngx-quill": "^30.0.1",
     "pdfjs-dist": "4.4.168",
     "quill": "^2.0.3",
     "rxjs": "7.8.1",
-    "tailwindcss": "latest"
+    "tailwindcss": "latest",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.9.0",
@@ -40,6 +42,7 @@
     "@types/node": "^22.14.0",
     "@types/quill": "^2.0.14",
     "concurrently": "^9.2.1",
+    "tsx": "^4.22.4",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

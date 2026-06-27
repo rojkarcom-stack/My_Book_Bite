@@ -10,7 +10,7 @@ import {
   providedIn: 'root'
 })
 export class SupabaseService {
-  private supabase: SupabaseClient;
+  public supabase: SupabaseClient;
   currentUser = signal<User | null>(null);
 
   constructor() {
@@ -157,12 +157,40 @@ export class SupabaseService {
   async signUp(email: string, password: string) {
     const { data, error } = await this.supabase.auth.signUp({ email, password });
     if (error) throw error;
+    
+    if (data.user) {
+      await this.upsertUserPermissions({
+        user_id: data.user.id,
+        allowed_languages: [],
+        allowed_grades: [],
+        subject_access: null,
+        is_premium: false
+      });
+    }
+
     return data.user;
   }
 
   async signOut() {
     const { error } = await this.supabase.auth.signOut();
     if (error) throw error;
+  }
+
+  async getAccessToken(): Promise<string | null> {
+    const { data, error } = await this.supabase.auth.getSession();
+    if (error) {
+      if (
+        error.message.includes('refresh_token_not_found') ||
+        error.message.toLowerCase().includes('refresh token') ||
+        error.message.toLowerCase().includes('invalid_grant')
+      ) {
+        console.warn('Session refresh failed (invalid token). Clearing session.');
+        await this.supabase.auth.signOut().catch(() => {});
+        this.currentUser.set(null);
+      }
+      return null;
+    }
+    return data.session?.access_token || null;
   }
 
   async getProfile(userId: string): Promise<any> {
@@ -200,13 +228,25 @@ export class SupabaseService {
   }
 
   async upsertUserPermissions(permissions: UserPermissions): Promise<UserPermissions> {
-    const { data, error } = await this.supabase
+    const payload: any = { ...permissions };
+    let result = await this.supabase
       .from('user_permissions')
-      .upsert(permissions)
+      .upsert(payload)
       .select()
       .single();
-    if (error) throw error;
-    return data;
+
+    if (result.error && JSON.stringify(result.error).includes('is_premium')) {
+      console.warn('Omit is_premium from user_permissions upsert due to schema cache restrictions.');
+      delete payload.is_premium;
+      result = await this.supabase
+        .from('user_permissions')
+        .upsert(payload)
+        .select()
+        .single();
+    }
+
+    if (result.error) throw result.error;
+    return result.data;
   }
 
   // --- Subjects ---
@@ -246,15 +286,15 @@ export class SupabaseService {
     return this.mapSubject(data);
   }
 
-  async updateSubject(id: string, subject: Partial<Subject>): Promise<Subject> {
+  async updateSubject(id: string, subject: Partial<Subject>): Promise<Subject | null> {
     const { data, error } = await this.supabase
       .from('subjects')
       .update(this.mapSubjectToDb(subject))
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw error;
-    return this.mapSubject(data);
+    return data ? this.mapSubject(data) : null;
   }
 
   async deleteSubject(id: string): Promise<void> {
@@ -313,13 +353,13 @@ export class SupabaseService {
     return data;
   }
 
-  async updateChapter(id: string, chapter: Partial<Chapter>): Promise<Chapter> {
+  async updateChapter(id: string, chapter: Partial<Chapter>): Promise<Chapter | null> {
     const { data, error } = await this.supabase
       .from('chapters')
       .update(chapter)
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw error;
     return data;
   }
@@ -397,15 +437,15 @@ export class SupabaseService {
     return (data || []).map(this.mapSubchapter);
   }
 
-  async updateSubchapter(id: string, subchapter: Partial<Subchapter>): Promise<Subchapter> {
+  async updateSubchapter(id: string, subchapter: Partial<Subchapter>): Promise<Subchapter | null> {
     const { data, error } = await this.supabase
       .from('subchapters')
       .update(this.mapSubchapterToDb(subchapter))
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw error;
-    return this.mapSubchapter(data);
+    return data ? this.mapSubchapter(data) : null;
   }
 
   async deleteSubchapter(id: string): Promise<void> {
@@ -418,12 +458,31 @@ export class SupabaseService {
 
   // --- Questions ---
   async getQuestionsForSubject(subjectId: string): Promise<Question[]> {
-    const { data, error } = await this.supabase
-      .from('questions')
-      .select('*')
-      .eq('subject_id', subjectId);
-    if (error) throw error;
-    return (data || []).map(q => this.mapQuestion(q));
+    const limit = 1000;
+    let from = 0;
+    let hasMore = true;
+    let allData: any[] = [];
+
+    while (hasMore) {
+      const { data, error } = await this.supabase
+        .from('questions')
+        .select('*')
+        .eq('subject_id', subjectId)
+        .range(from, from + limit - 1);
+
+      if (error) throw error;
+      
+      const currentBatch = data || [];
+      allData = allData.concat(currentBatch);
+
+      if (currentBatch.length < limit) {
+        hasMore = false;
+      } else {
+        from += limit;
+      }
+    }
+
+    return allData.map(q => this.mapQuestion(q));
   }
 
   async getQuestions(subchapterId: string): Promise<Question[]> {
@@ -483,15 +542,15 @@ export class SupabaseService {
     return (data || []).map(this.mapQuestion);
   }
 
-  async updateQuestion(id: string, question: Partial<Question>): Promise<Question> {
+  async updateQuestion(id: string, question: Partial<Question>): Promise<Question | null> {
     const { data, error } = await this.supabase
       .from('questions')
       .update(this.mapQuestionToDb(question))
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw error;
-    return this.mapQuestion(data);
+    return data ? this.mapQuestion(data) : null;
   }
 
   async deleteQuestion(id: string): Promise<void> {
@@ -603,15 +662,15 @@ export class SupabaseService {
     if (error) throw error;
   }
 
-  async updateStudyGuide(id: string, guide: Partial<StudyGuide>): Promise<StudyGuide> {
+  async updateStudyGuide(id: string, guide: Partial<StudyGuide>): Promise<StudyGuide | null> {
     const { data, error } = await this.supabase
       .from('study_guides')
       .update(this.mapStudyGuideToDb(guide))
       .eq('id', id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) throw error;
-    return this.mapStudyGuide(data);
+    return data ? this.mapStudyGuide(data) : null;
   }
 
   // --- User Achievements ---
@@ -635,12 +694,26 @@ export class SupabaseService {
 
   // --- Admin Methods ---
   async getAllUsers(limitCount: number = 50): Promise<any[]> {
-    const { data, error } = await this.supabase
+    const { data: profiles, error: pError } = await this.supabase
       .from('profiles')
       .select('*')
       .limit(limitCount);
-    if (error) throw error;
-    return data || [];
+    
+    if (pError) throw pError;
+    if (!profiles || profiles.length === 0) return [];
+
+    const userIds = profiles.map(p => p.id);
+    const { data: permissions, error: permError } = await this.supabase
+      .from('user_permissions')
+      .select('*')
+      .in('user_id', userIds);
+      
+    if (permError) throw permError;
+    
+    return profiles.map(profile => ({
+      ...profile,
+      user_permissions: permissions?.find(p => p.user_id === profile.id) || null
+    }));
   }
 
   async searchUsersByEmail(email: string, limitCount: number = 20): Promise<any[]> {
@@ -661,6 +734,134 @@ export class SupabaseService {
       .limit(limitCount);
     if (error) throw error;
     return data || [];
+  }
+
+  // --- Manually Create User inside Admin panel via Secure Node Backend ---
+  async manuallyCreateUser(payload: {
+    email: string;
+    password?: string;
+    allowedLanguages?: string[];
+    allowedGrades?: number[];
+    role?: 'student' | 'teacher' | 'admin';
+    isAdminUser?: boolean;
+  }): Promise<any> {
+    const { data: { session } } = await this.supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      throw new Error('Unauthorized: No active administrator session found.');
+    }
+
+    const response = await fetch('/api/admin/create-user', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseData = await response.json();
+    if (!response.ok) {
+      throw new Error(responseData.error || 'Failed to create user');
+    }
+    return responseData;
+  }
+
+  async manuallyUpdateUser(payload: {
+    targetUserId: string;
+    password?: string;
+    allowedLanguages?: string[];
+    allowedGrades?: number[];
+    role?: 'student' | 'teacher' | 'admin';
+    isAdminUser?: boolean;
+    isPremium?: boolean;
+  }): Promise<any> {
+    const { data: { session } } = await this.supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      throw new Error('Unauthorized: No active administrator session found.');
+    }
+
+    const response = await fetch('/api/admin/update-user', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseData = await response.json();
+    if (!response.ok) {
+      throw new Error(responseData.error || 'Failed to update user');
+    }
+    return responseData;
+  }
+
+  async manuallyDeleteUser(userId: string): Promise<any> {
+    const { data: { session } } = await this.supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+      throw new Error('Unauthorized: No active administrator session found.');
+    }
+
+    const response = await fetch('/api/admin/delete-user', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ userId })
+    });
+
+    const responseData = await response.json();
+    if (!response.ok) {
+      throw new Error(responseData.error || 'Failed to delete user');
+    }
+    return responseData;
+  }
+
+  async deleteQuizAttempt(attemptId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from('quiz_attempts')
+      .delete()
+      .eq('id', attemptId);
+    if (error) throw error;
+  }
+
+  async clearUserQuizAttempts(userId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from('quiz_attempts')
+      .delete()
+      .eq('user_id', userId);
+    if (error) throw error;
+  }
+
+  // --- Visitor Analytics secure accessor ---
+  async getVisitorStats(): Promise<{
+    totalViews: number;
+    uniqueCount: number;
+    dailyStats: Record<string, { views: number; visitors: number }>;
+    recentVisits: any[];
+  }> {
+    const token = await this.getAccessToken();
+    if (!token) {
+      throw new Error('Unauthorized: No active administrator session found.');
+    }
+
+    const response = await fetch('/api/analytics/stats', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch visitor stats: ${response.status} ${response.statusText}`);
+    }
+
+    const responseData = await response.json();
+    return responseData;
   }
 
   // --- Storage ---

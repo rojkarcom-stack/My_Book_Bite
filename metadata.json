@@ -1,6 +1,6 @@
 {
-  "name": "Copy of Classroom Quiz App",
-  "description": "An interactive quiz application for students from grades 1 to 12. Administrators can add and manage questions, while students can test their knowledge and see their scores.",
+  "name": "School Quiz Pro",
+  "description": "An AI-powered adaptive study companion and interactive quiz platform for students grades 1 to 12. Instant multilingual support across English, Arabic, and Kurdish.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

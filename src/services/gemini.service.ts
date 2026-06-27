@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { Question, Language } from '../models';
 import { TranslationService } from './translation.service';
+import { SupabaseService } from './supabase.service';
 
 export interface QuestionGenerationParams {
     textContent: string;
@@ -129,17 +130,56 @@ export type AiGeneratedQuestion = Pick<Question, 'text' | 'options' | 'correctAn
 @Injectable({ providedIn: 'root' })
 export class GeminiService {
   private t = inject(TranslationService);
-  private getAI() {
-    return new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  private supabaseService = inject(SupabaseService);
+  
+  private get proModel(): string {
+    return 'gemini-3.5-flash';
+  }
+  private get liteModel(): string {
+    return 'gemini-3.1-flash-lite';
+  }
+  private getAI(): any {
+    return {
+      models: {
+        generateContent: async (params: { model: string; contents: any; config?: any }) => {
+          const token = await this.supabaseService.getAccessToken();
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json'
+          };
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+          
+          const response = await fetch('/api/gemini/generateContent', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: params.model,
+              contents: params.contents,
+              config: params.config
+            })
+          });
+
+          if (!response.ok) {
+            const errorDetails = await response.json().catch(() => ({}));
+            const err = new Error(errorDetails.error || 'Server-side Gemini proxy failed');
+            (err as any).status = response.status || errorDetails.status;
+            (err as any).code = errorDetails.code;
+            throw err;
+          }
+
+          const data = await response.json().catch(() => ({}));
+          return {
+            text: data.text || '',
+            candidates: data.candidates || []
+          };
+        }
+      }
+    } as any;
   }
 
   async ensureApiKey(): Promise<void> {
-    if (typeof window !== 'undefined' && (window as any).aistudio) {
-      const aistudio = (window as any).aistudio;
-      if (!(await aistudio.hasSelectedApiKey())) {
-        await aistudio.openSelectKey();
-      }
-    }
+    // No-op because all Gemini API calls have been migrated to the secure server-side proxy
   }
 
   private getLanguageName(lang: Language): string {
@@ -155,7 +195,7 @@ export class GeminiService {
     `;
   }
 
-  private async callGeminiWithRetry<T>(operation: () => Promise<T>, maxRetries = 5): Promise<T> {
+  private async callGeminiWithRetry(operation: () => Promise<any>, maxRetries = 5): Promise<any> {
     let attempt = 0;
     while (attempt < maxRetries) {
       try {
@@ -183,7 +223,12 @@ export class GeminiService {
                             errorMessage.includes('503') || errorMessage.includes('429') || errorMessage.includes('500') ||
                             errorMessage.includes('UNAVAILABLE') || errorMessage.includes('RESOURCE_EXHAUSTED') ||
                             errorMessage.includes('quota') || errorMessage.includes('limit') ||
-                            errorMessage.includes('high demand') || errorMessage.includes('Internal Server Error');
+                            errorMessage.includes('high demand') || errorMessage.includes('Internal Server Error') ||
+                            errorMessage.toLowerCase().includes('failed to fetch') ||
+                            errorMessage.toLowerCase().includes('fetch failed') ||
+                            errorMessage.toLowerCase().includes('networkerror') ||
+                            errorMessage.toLowerCase().includes('timeout') ||
+                            error?.name === 'TypeError';
         
         if (isRetryable && attempt < maxRetries) {
           // Substantially increase the base delay for 429 rate limit or quota errors to allow cooldown window
@@ -249,11 +294,33 @@ export class GeminiService {
     );
   }
 
-  private cleanJsonString(str: string): string {
-    if (!str) return '';
+  private safeJsonParse(jsonStr: any, fallback: any = null): any {
+    if (jsonStr === undefined || jsonStr === null) return fallback;
+    const cleaned = String(jsonStr).trim();
+    if (cleaned === '' || cleaned === 'undefined' || cleaned === 'null') return fallback;
+    
+    try {
+      return JSON.parse(cleaned);
+    } catch (e) {
+      console.error('Failed to parse JSON string:', e);
+      // If it looks like it might be JSON but failed, try cleaning it one more time
+      try {
+        const secondaryCleaned = this.cleanJsonString(cleaned);
+        if (secondaryCleaned && secondaryCleaned !== cleaned) {
+          return JSON.parse(secondaryCleaned);
+        }
+      } catch (_) {}
+      return fallback;
+    }
+  }
+
+  private cleanJsonString(str: any): string {
+    if (str === undefined || str === null) return '';
+    
+    let cleaned = String(str).trim();
+    if (cleaned === '' || cleaned === 'undefined' || cleaned === 'null') return '';
     
     // Remove potential markdown backticks
-    let cleaned = str.trim();
     const match = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (match && match[1]) {
       cleaned = match[1].trim();
@@ -382,7 +449,7 @@ Corrected Text:`;
 
     try {
       const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: this.liteModel,
         contents: prompt,
         config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       }));
@@ -405,7 +472,7 @@ Corrected Text:`;
 
     try {
       const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: this.liteModel,
         contents: prompt,
         config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       }));
@@ -426,6 +493,7 @@ Corrected Text:`;
 
     while (remainingQuestions > 0) {
         await this.ensureApiKey();
+        let jsonStrToParse = '';
         const questionsToGenerate = Math.min(remainingQuestions, CHUNK_SIZE);
         
         let prompt = `
@@ -494,11 +562,10 @@ Corrected Text:`;
           ? { parts: [...imageParts, { text: prompt }] }
           : prompt;
 
-        let jsonStrToParse = '';
         try {
-            const useCheap = params.useCheapModel !== false; // Default to true for cost optimization
-            const modelName = useCheap ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview';
-            const thinkingConfig = useCheap ? { thinkingLevel: ThinkingLevel.LOW } : { thinkingLevel: ThinkingLevel.HIGH };
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
+    const modelName = useCheap ? this.liteModel : this.proModel;
+    const thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
             const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
                 model: modelName,
                 contents: contents,
@@ -527,10 +594,13 @@ Corrected Text:`;
             }));
 
             jsonStrToParse = this.cleanJsonString(response.text);
+            if (!jsonStrToParse) {
+                console.error('AI returned an empty response. Response text was:', response.text);
+                throw new Error(this.t.translate('gemini.invalidFormat') || 'AI returned an empty response.');
+            }
+        const generatedChunk = this.safeJsonParse(jsonStrToParse);
 
-            const generatedChunk = JSON.parse(jsonStrToParse);
-
-            if (Array.isArray(generatedChunk) && generatedChunk.every(this.isValidQuestionFormat)) {
+        if (generatedChunk && Array.isArray(generatedChunk) && generatedChunk.every(this.isValidQuestionFormat)) {
                 const shuffledChunk = generatedChunk.map(q => this.shuffleQuestionOptions(q));
                 allGeneratedQuestions.push(...shuffledChunk);
                 remainingQuestions -= generatedChunk.length;
@@ -620,9 +690,10 @@ Corrected Text:`;
     }
     
     let jsonStrToParse = '';
+    
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: this.liteModel,
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -649,10 +720,13 @@ Corrected Text:`;
         }));
         
         jsonStrToParse = this.cleanJsonString(response.text);
+        if (!jsonStrToParse) {
+            console.error('AI returned an empty response for curriculum. Response text was:', response.text);
+            throw new Error(this.t.translate('gemini.invalidFormat') || 'AI returned an empty response.');
+        }
+        const generated = this.safeJsonParse(jsonStrToParse);
 
-        const generated = JSON.parse(jsonStrToParse);
-
-        if (Array.isArray(generated) && generated.every(this.isValidQuestionFormat)) {
+        if (generated && Array.isArray(generated) && generated.every(this.isValidQuestionFormat)) {
             return generated.map(q => this.shuffleQuestionOptions(q));
         } else {
             console.error('AI variation response is not in the expected format:', generated);
@@ -702,7 +776,7 @@ Corrected Text:`;
 
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: this.liteModel,
             contents: prompt,
             config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
         }));
@@ -734,7 +808,7 @@ Corrected Text:`;
 
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: this.liteModel,
             contents: prompt,
             config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
         }));
@@ -771,9 +845,9 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
     const results: string[] = new Array(chunks.length).fill('');
     
-    const useCheap = useCheapModel !== false; // Default to true
-    const modelName = useCheap ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview';
-    const thinkingConfig = useCheap ? { thinkingLevel: ThinkingLevel.LOW } : { thinkingLevel: ThinkingLevel.HIGH };
+    const useCheap = useCheapModel === true; // Default to false (Pro Plan by default)
+    const modelName = useCheap ? this.liteModel : this.proModel;
+    const thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
     
     // Process chunks sequentially to minimize API load during high demand
     for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
@@ -828,11 +902,17 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
         **CRITICAL INSTRUCTIONS:**
         1.  **Correct, Don't Rewrite:** Fix only clear errors in "text", "options" (the strings inside), and "explanation". Do NOT change the original wording, style, or sentence structure unless it's grammatically incorrect.
-        2.  **Preserve Structure:** Maintain the "correctAnswerIndex" exactly as it is.
-        3.  **Educational Quality:** Ensure the content remains academically accurate.
-        4.  **LATEX & BACKSLASHES:** For any LaTeX formulas, you MUST use double backslashes for the commands in your JSON string (e.g., use "\\\\tau" instead of "\\tau").
-        5.  **NUMBER FORMATTING:** For ${languageName}, ensure any numbers with a sign (e.g., -5) have the sign on the LEFT.
-        6.  **JSON ONLY:** Output ONLY the corrected JSON array. No explanations or conversational text.
+        2.  **EXPLANATION STANDARDS**: The explanation MUST follow this exact 3-part structure:
+            a. **Direct Answer Announcement**: Start with a direct statement confirming the correct answer.
+            b. **Detailed Reasoning**: Explaining *why* it is correct.
+            c. **Distractor Refutation**: Explaining *why* others are wrong.
+        3.  **EXPLANATION FORMATTING**: In the explanation, refer to options using the correct term in ${languageName} (e.g., "${language === 'ar' ? 'الخيار' : (language.startsWith('ku') ? 'بژاردەی' : 'Option')}" followed by a, b, c, or d). NEVER use numbers like "Option 1".
+        4.  **Preserve Structure**: Maintain the "correctAnswerIndex" exactly as it is.
+        5.  **Educational Quality**: Ensure the content remains academically accurate.
+        6.  **LATEX & BACKSLASHES:** For any LaTeX formulas, you MUST use double backslashes for the commands in your JSON string (e.g., use "\\\\tau" instead of "\\tau").
+        7.  **NUMBER FORMATTING:** For ${languageName}, ensure any numbers with a sign (e.g., -5) have the sign on the LEFT.
+        8.  **LANGUAGE CONSISTENCY:** Everything MUST be in ${languageName}. NEVER mix ${languageName} with other languages.
+        9.  **JSON ONLY:** Output ONLY the corrected JSON array. No explanations or conversational text.
       `;
 
       if (language === 'ku_badini') {
@@ -848,7 +928,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
       try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: this.proModel,
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -875,7 +955,11 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
         }));
 
         const cleanedJson = this.cleanJsonString(response.text);
-        const correctedChunk = JSON.parse(cleanedJson);
+        if (!cleanedJson) {
+            console.error('AI returned an empty response for study guide. Response text was:', response.text);
+            throw new Error(this.t.translate('gemini.invalidFormat') || 'AI returned an empty response.');
+        }
+        const correctedChunk = this.safeJsonParse(cleanedJson);
 
         if (Array.isArray(correctedChunk) && correctedChunk.every(this.isValidQuestionFormat)) {
           allCorrected.push(...correctedChunk);
@@ -892,46 +976,358 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
     return allCorrected;
   }
 
+  async analyzeSubchapterAccuracy(
+    questions: any[],
+    subchapterName: string,
+    language: Language
+  ): Promise<any> {
+    const languageName = this.getLanguageName(language);
+    
+    const prompt = `
+      You are an extremely strict, pedantic, and meticulous curriculum inspector and QA director for elite educational platforms.
+      Your task is to analyze the accuracy of the following multiple-choice questions, options, answers, and explanations within the context of the subchapter topic "${subchapterName}".
+      
+      Questions to analyze (in ${languageName}):
+      ---
+      ${JSON.stringify(questions.map(q => ({
+        id: q.id,
+        text: q.text,
+        options: q.options,
+        correctAnswerIndex: q.correctAnswerIndex,
+        explanation: q.explanation || ''
+      })))}
+      ---
+
+      You must scrutinize every question, option, answer, and explanation. Do not be polite, lenient, or forgiving. Your goal is perfect educational quality.
+      
+      Specifically search for and flag:
+      1. **Subtle Scientific or Factual Ambiguities**: Any phrasing in the question or options that could be technically debated, inaccurate, or slightly misaligned with the curriculum for "${subchapterName}".
+      2. **Grammatical, Punctuation, and Spelling Flaws**: Missing questions marks, typos, capitalization discrepancies, syntax mistakes, or inconsistent formatting (e.g., options ending in periods inconsistently).
+      3. **Distractor Quality Problems**: Ineffective distractors that are too obvious, too simple, confusingly worded, or clearly don't match the level of the question.
+      4. **Explanation Quality & Educational Depth**: Any explanation that is too brief (e.g. fewer than 3-4 sentences), fails to clearly clarify *why* the correct answer is correct, or fails to explain *why* each of the other three distractors is incorrect.
+      5. **Correct Answer Key Errors**: Check if the "correctAnswerIndex" actually points to the single, indisputably correct option based on the options list.
+
+      CRITICAL MANDATE:
+      - If a question has even the SLIGHTEST room for improvement (e.g. the explanation could be enriched to be more descriptive, options could be made more professional, or punctuation can be cleaned), you MUST flag it as an issue in "detailedIssues" (with 'low' or 'medium' severity) and provide a polished, improved version in "correctedQuestion".
+      - We want to use this tool to optimize the database. Therefore, aim to find constructive suggestions/edits for any questions that are not absolutely perfect, comprehensive, and flawless.
+      - If there are genuinely no improvements possible for a question after deep analysis, you may omit it. But inspect carefully, as almost all generated questions have slight room for enhancement.
+
+      For each detailed issue, you MUST provide:
+      - The ID of the original question ("questionId").
+      - An auto-corrected formulation of this question in "correctedQuestion" containing the text, options, correctAnswerIndex, and explanation resolving all identified flaws.
+
+      Ensure the JSON response follows the requested schema.
+    `;
+
+    try {
+      const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
+        model: this.liteModel,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              overallAccuracyScore: { type: Type.INTEGER, description: "Scale of 0 to 100. Overall status rating." },
+              questionsAccuracyScore: { type: Type.INTEGER, description: "Scale of 0 to 100. Accuracy of question phrasings." },
+              answersAccuracyScore: { type: Type.INTEGER, description: "Scale of 0 to 100. Match of correct answers and indexes." },
+              explanationsAccuracyScore: { type: Type.INTEGER, description: "Scale of 0 to 100. Correctness of explanations." },
+              
+              questionsFeedback: { type: Type.STRING, description: "Feedback on the questions." },
+              answersFeedback: { type: Type.STRING, description: "Feedback on options and correct answers." },
+              explanationsFeedback: { type: Type.STRING, description: "Feedback on explanations." },
+              
+              factualChecks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "List of key factual check observations."
+              },
+              grammaticalChecks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "List of spelling or terminology observations."
+              },
+              
+              detailedIssues: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    questionId: { type: Type.STRING, description: "The unique ID of the question that has this issue." },
+                    questionText: { type: Type.STRING, description: "The content of the original question." },
+                    issueType: { type: Type.STRING, description: "Can be 'question', 'answer', 'explanation', or 'none'." },
+                    severity: { type: Type.STRING, description: "Can be 'low', 'medium', or 'high'." },
+                    description: { type: Type.STRING, description: "Description of the flaw or error find." },
+                    recommendation: { type: Type.STRING, description: "Clear path to fixing." },
+                    correctedQuestion: {
+                      type: Type.OBJECT,
+                      properties: {
+                        text: { type: Type.STRING, description: "Corrected version of the question text." },
+                        options: {
+                          type: Type.ARRAY,
+                          items: { type: Type.STRING },
+                          description: "Exactly 4 options, including the correct one."
+                        },
+                        correctAnswerIndex: { type: Type.INTEGER, description: "The index of the correct answer (0 to 3)." },
+                        explanation: { type: Type.STRING, description: "The corrected and updated explanation text." }
+                      },
+                      required: ["text", "options", "correctAnswerIndex", "explanation"]
+                    }
+                  },
+                  required: ["questionId", "questionText", "issueType", "severity", "description", "recommendation", "correctedQuestion"]
+                }
+              }
+            },
+            required: [
+              "overallAccuracyScore", "questionsAccuracyScore", "answersAccuracyScore", "explanationsAccuracyScore",
+              "questionsFeedback", "answersFeedback", "explanationsFeedback", "factualChecks", "grammaticalChecks", "detailedIssues"
+            ]
+          },
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      }));
+
+      const cleanedJson = this.cleanJsonString(response.text);
+      return JSON.parse(cleanedJson);
+    } catch (error) {
+      console.error('Error analyzing subchapter accuracy:', error);
+      throw error;
+    }
+  }
+
+  async analyzeSingleQuestionAccuracy(
+    question: any,
+    subchapterName: string,
+    language: Language,
+    chapterName: string = ''
+  ): Promise<any> {
+    // Bypassed ensureApiKey check because Check Content Accuracy uses the Monthly Pro Plan instead of custom user API key
+    const languageName = this.getLanguageName(language);
+    
+    const prompt = `
+      You are an extremely strict, pedantic, and meticulous curriculum inspector and QA director for elite educational platforms.
+      Analyze the accuracy and educational quality of the following multiple-choice question within the context of:
+      - Chapter: "${chapterName}"
+      - Subchapter: "${subchapterName}"
+      
+      Question data (in ${languageName}):
+      ---
+      ID: ${question.id}
+      Text: ${question.text}
+      Options:
+      - 0: ${question.options[0] || ''}
+      - 1: ${question.options[1] || ''}
+      - 2: ${question.options[2] || ''}
+      - 3: ${question.options[3] || ''}
+      correctAnswerIndex: ${question.correctAnswerIndex}
+      Explanation: ${question.explanation || 'None'}
+      ---
+
+      You must scrutinize this question, options, answer index, and explanation to absolute perfection. Do not be polite, lenient, or forgiving. Your goal is perfect educational quality.
+      
+      SCRUTINY & REPAIR STANDARDS:
+      1. **Pedagogical or Academic Mistakes**: Flag any factual inaccuracies, scientific errors, or misalignments with the topic "${subchapterName}".
+      2. **Misplaced Content**: Flag if the question is clearly about a different topic or chapter altogether and doesn't belong in "${subchapterName}".
+      3. **Broken LaTeX/MathJax**: Identify formulas that are syntactically incorrect or will fail to render (especially double backslash errors).
+      4. **Answer Alignment Flaws**: Ensure "correctAnswerIndex" properly matches the unique correct answer.
+      5. **Grammatical & Style Errors**: Flag any typos, punctuation errors, or significant stylistic inconsistencies.
+      6. **Standardization Audit**: If the CURRENT explanation does not perfectly follow the 3-part structure defined below, you MUST set "hasIssue" = true and provide the corrected version.
+
+      REPAIR QUALITY STANDARDS (FOR "correctedQuestion"):
+      - **EXPLANATION STRUCTURE**: The explanation MUST follow this exact 3-part structure:
+        1. **Direct Answer Announcement**: Start with a direct statement confirming the correct answer (e.g., "The correct option is...").
+        2. **Detailed Reasoning**: Provide 2-3 sentences explaining *why* it is scientifically or academically correct.
+        3. **Distractor Refutation**: Provide 1-2 sentences explaining *why* each of the other options is incorrect.
+      - **EXPLANATION FORMATTING**: In the explanation, refer to options using the correct term in ${languageName} (e.g., "${language === 'ar' ? 'الخيار' : (language.startsWith('ku') ? 'بژاردەی' : 'Option')}" followed by a, b, c, or d). NEVER use numbers like "Option 1".
+      - **NO EXTRA INFO**: Do NOT add extra introductory phrases, context, or peripheral information that wasn't in the original question.
+      - **LANGUAGE CONSISTENCY**: Everything MUST be in ${languageName}. NEVER mix with other languages. If the input is mixed, unify it to perfect ${languageName}.
+      - **TONE**: Maintain a professional, objective, and encouraging pedagogical tone.
+
+      CRITICAL MANDATE:
+      - **Optimization is our major goal.** If a question can be clarified, or an explanation can be standardized to the 3-part format, you MUST set "hasIssue" = true.
+      - Set "hasIssue" = true if there is even a minor factual error, broken format, or structural inconsistency.
+      - Set "hasIssue" = false ONLY if the question is factually perfect, properly formatted, and already follows the 3-part explanation structure perfectly.
+    `;
+
+    try {
+      const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
+        model: this.liteModel,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              hasIssue: { type: Type.BOOLEAN, description: "True if any flaw, mistake, spelling/formatting, or explanation brevity is detected." },
+              issueType: { type: Type.STRING, description: "Can be 'question', 'answer', 'explanation', or 'none'." },
+              severity: { type: Type.STRING, description: "Can be 'low', 'medium', or 'high'." },
+              description: { type: Type.STRING, description: "Detailed description of the error, typo, or gap in pedagogical quality." },
+              recommendation: { type: Type.STRING, description: "Clear, actionable recommendation on how to resolve the flaw." },
+              correctedQuestion: {
+                type: Type.OBJECT,
+                properties: {
+                  text: { type: Type.STRING, description: "Professionally corrected question text." },
+                  options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "Exactly 4 options, corrected for grammar and clarity."
+                  },
+                  correctAnswerIndex: { type: Type.INTEGER, description: "The single correct answer index (0 to 3)." },
+                  explanation: { type: Type.STRING, description: "A standardized explanation following the 3-part structure: Answer Statement, Detailed Reasoning, and Distractor Refutation." }
+                },
+                required: ["text", "options", "correctAnswerIndex", "explanation"]
+              }
+            },
+            required: ["hasIssue", "issueType", "severity", "description", "recommendation"]
+          },
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      }));
+
+      const cleanedJson = this.cleanJsonString(response.text);
+      return JSON.parse(cleanedJson);
+    } catch (error) {
+      console.error('Error analyzing single question accuracy:', error);
+      return {
+        hasIssue: false,
+        issueType: 'none',
+        severity: 'low',
+        description: '',
+        recommendation: ''
+      };
+    }
+  }
+
+  async analyzeBatchAccuracy(
+    questions: any[],
+    subchapterName: string,
+    language: Language,
+    chapterName: string = ''
+  ): Promise<any[]> {
+    const languageName = this.getLanguageName(language);
+    
+    const prompt = `
+      You are a high-standards curriculum auditor.
+      Analyze the accuracy and quality of the following multiple-choice questions within the context of:
+      - Chapter: "${chapterName}"
+      - Subchapter: "${subchapterName}"
+      
+      QUESTIONS:
+      ---
+      ${JSON.stringify(questions.map(q => ({ id: q.id, text: q.text, options: q.options, correctAnswerIndex: q.correctAnswerIndex, explanation: q.explanation })))}
+      ---
+
+      SCRUTINY & REPAIR STANDARDS:
+      1. Flag any factual errors, scientific inaccuracies, or broken LaTeX formulas.
+      2. Flag if the correctAnswerIndex is wrong or ambiguous.
+      3. Flag any significant typos or grammatical errors.
+      4. Flag if the question is clearly MISPLACED (belongs in a different chapter/topic).
+      5. **Standardization Audit**: If any question's explanation does NOT follow the 3-part structure defined below, it MUST be flagged as an issue for repair.
+
+      REPAIR QUALITY STANDARDS (FOR "correctedQuestion"):
+      - **EXPLANATION STRUCTURE**: The explanation MUST follow this exact 3-part structure:
+        1. **Direct Answer Announcement**: Start with a direct statement confirming the correct answer (e.g., "The correct option is...").
+        2. **Detailed Reasoning**: Provide 2-3 sentences explaining *why* it is scientifically or academically correct.
+        3. **Distractor Refutation**: Provide 1-2 sentences explaining *why* each of the other options is incorrect.
+      - **EXPLANATION FORMATTING**: Corrected explanations MUST refer to options using the correct term in ${languageName} (e.g., "${language === 'ar' ? 'الخيار' : (language.startsWith('ku') ? 'بژاردەی' : 'Option')}" followed by a, b, c, or d).
+      - **LANGUAGE CONSISTENCY**: Everything MUST be in ${languageName}. NEVER mix with other languages. If the input is mixed, unify it to perfect ${languageName}.
+      - **TONE**: Maintain a professional, objective, and encouraging pedagogical tone.
+      
+      OUTPUT:
+      - Return a JSON array of analysis objects, one for each question in the same order.
+      - **CRITICAL**: The "questionId" in the output MUST be EXACTLY the same as the "id" provided in the input. Do NOT truncate, modify, or hallucinate IDs.
+      - Each object must have "hasIssue" (boolean), "issueType", "severity", "description", "recommendation", and "correctedQuestion".
+      - "correctedQuestion" should ONLY be provided if "hasIssue" is true.
+      - Set "hasIssue" to true if there is any factual error, broken LaTeX, OR if the explanation needs standardization to the 3-part structure.
+    `;
+
+    try {
+      const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
+        model: this.liteModel,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                questionId: { type: Type.STRING },
+                hasIssue: { type: Type.BOOLEAN },
+                issueType: { type: Type.STRING },
+                severity: { type: Type.STRING },
+                description: { type: Type.STRING },
+                recommendation: { type: Type.STRING },
+                correctedQuestion: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING },
+                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    correctAnswerIndex: { type: Type.INTEGER },
+                    explanation: { type: Type.STRING }
+                  },
+                  required: ["text", "options", "correctAnswerIndex", "explanation"]
+                }
+              },
+              required: ["questionId", "hasIssue", "issueType", "severity", "description", "recommendation"]
+            }
+          },
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      }));
+
+      const cleanedJson = this.cleanJsonString(response.text);
+      return JSON.parse(cleanedJson);
+    } catch (error) {
+      console.error('Error in batch accuracy analysis:', error);
+      return questions.map(q => ({ questionId: q.id, hasIssue: false }));
+    }
+  }
+
   async autoCategorizeQuestions(
     questions: { id: string; text: string }[], 
-    subchapters: { id: string; name: string }[]
+    subchapters: { id: string; name: string; chapterName?: string }[]
   ): Promise<{ questionId: string; targetSubchapterId: string }[]> {
     await this.ensureApiKey();
     
     const CHUNK_SIZE = 15;
     const finalMappings: { questionId: string; targetSubchapterId: string }[] = [];
 
-    const subchapterList = subchapters.map(s => `ID: ${s.id} | Name: ${s.name}`).join('\n');
+    const subchapterList = subchapters.map(s => {
+      let desc = `ID: ${s.id} | Subchapter: ${s.name}`;
+      if (s.chapterName) desc += ` (in Chapter: ${s.chapterName})`;
+      return desc;
+    }).join('\n');
 
     for (let i = 0; i < questions.length; i += CHUNK_SIZE) {
       const chunk = questions.slice(i, i + CHUNK_SIZE);
       const prompt = `
         You are an expert curriculum organizer. 
-        I have a list of questions that might be misplaced in their current subchapter.
-        Your task is to analyze each question and determine which of the available target subchapters (from the list below) is the BEST fit for it.
-
-        AVAILABLE TARGET SUBCHAPTERS:
+        Analyze each question and determine which of the available target subchapters (from the list below) is the BEST fit for it.
+        
+        **AVAILABLE TARGET SUBCHAPTERS:**
         ---
         ${subchapterList}
         ---
 
-        QUESTIONS TO CATEGORIZE:
+        **QUESTIONS TO CATEGORIZE:**
         ---
         ${chunk.map(q => `ID: ${q.id} | Content: ${q.text}`).join('\n')}
         ---
 
         **INSTRUCTIONS:**
         1.  Carefully read each question.
-        2.  Find the target subchapter whose title/topic most closely matches the question's content.
-        3.  Return a JSON array of objects, each containing:
+        2.  Find the target subchapter whose title and parent chapter most closely match the question's content.
+        3.  If multiple subchapters seem related, choose the most specific one.
+        4.  Return a JSON array of objects, each containing:
             - "questionId": The ID of the question.
             - "targetSubchapterId": The ID of the best-fitting subchapter.
-        4.  OUTPUT ONLY THE JSON ARRAY.
+        5.  OUTPUT ONLY THE JSON ARRAY. No commentary.
       `;
 
       try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: this.liteModel,
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -966,36 +1362,47 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
   async identifyMisplacedQuestions(
     questions: { id: string; text: string }[],
-    currentSubchapterName: string
+    currentSubchapterName: string,
+    currentChapterName: string = ''
   ): Promise<string[]> {
     await this.ensureApiKey();
     
-    const CHUNK_SIZE = 25;
+    const CHUNK_SIZE = 30; // Slightly increased for cost efficiency
     const misplacedIds: string[] = [];
 
     for (let i = 0; i < questions.length; i += CHUNK_SIZE) {
       const chunk = questions.slice(i, i + CHUNK_SIZE);
       const prompt = `
-        You are a curriculum auditor. 
-        The current subchapter is titled: "${currentSubchapterName}".
+        You are a highly precise curriculum auditor. 
+        The current location of these questions is:
+        - Chapter: "${currentChapterName}"
+        - Subchapter: "${currentSubchapterName}"
         
-        Analyze the following questions and identify which ones DO NOT belong in this subchapter. 
-        A question is misplaced if its topic is distinctly different from "${currentSubchapterName}".
+        Your task is to analyze the following questions and identify which ones DO NOT strictly belong in this specific subchapter. 
+        
+        **CRITERIA FOR "MISPLACED":**
+        - A question is MISPLACED if its core subject matter is covered by a completely different topic.
+        - A question is NOT MISPLACED if it is a general introductory question or if it relates to the technical foundations required for the subchapter.
+        - Be conservative: only flag questions that are clearly out of place (e.g., a question about "Photosynthesis" in a "Nuclear Physics" subchapter).
+        
+        **CONTEXT:**
+        ${currentChapterName ? `The broader context of these topics is the chapter: "${currentChapterName}".` : ''}
+        The specific focused topic is: "${currentSubchapterName}".
 
-        QUESTIONS:
+        QUESTIONS TO AUDIT:
         ---
         ${chunk.map(q => `ID: ${q.id} | Content: ${q.text}`).join('\n')}
         ---
 
         **INSTRUCTIONS:**
-        1.  Return a JSON array containing ONLY the IDs of the questions that are MISPLACED.
-        2.  If all questions belong, return an empty array [].
-        3.  OUTPUT ONLY THE JSON ARRAY.
+        1.  Return a JSON array containing ONLY the IDs of the questions that are clearly MISPLACED.
+        2.  If all questions are relevant, return an empty array [].
+        3.  OUTPUT ONLY THE JSON ARRAY. No commentary.
       `;
 
       try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: this.liteModel,
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -1058,7 +1465,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
       try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: this.liteModel,
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
@@ -1085,9 +1492,13 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
         }));
 
         const cleanedJson = this.cleanJsonString(response.text);
-        const translatedChunk = JSON.parse(cleanedJson);
+        if (!cleanedJson) {
+            console.error('AI returned an empty response for translation. Response text was:', response.text);
+            throw new Error(this.t.translate('gemini.invalidFormat') || 'AI returned an empty response.');
+        }
+        const translatedChunk = this.safeJsonParse(cleanedJson);
 
-        if (Array.isArray(translatedChunk) && translatedChunk.every(this.isValidQuestionFormat)) {
+        if (translatedChunk && Array.isArray(translatedChunk) && translatedChunk.every(this.isValidQuestionFormat)) {
           allTranslated.push(...translatedChunk);
         } else {
           console.error('Invalid translation format from AI:', translatedChunk);
@@ -1119,7 +1530,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
       ${text}`;
 
       const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: this.liteModel,
         contents: [{ role: 'user', parts: [{ text: prompt }] }]
       }));
 
@@ -1149,7 +1560,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
       ${guideHtml}`;
 
       const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: this.liteModel,
         contents: [{ role: 'user', parts: [{ text: prompt }] }]
       }));
 
@@ -1164,6 +1575,9 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
     // Bypassed ensureApiKey check because Study Guide generation uses the Monthly Pro Plan instead of custom user API key
     const languageName = this.getLanguageName(params.language);
     const isRtl = ['ar', 'ku_sorani', 'ku_badini'].includes(params.language);
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
+    const modelNameVal = useCheap ? this.liteModel : this.proModel;
+    const thinkingConfigVal = { thinkingLevel: ThinkingLevel.LOW };
 
     const systemInstruction = `You are an expert educator creating study materials. Your output MUST be a single, valid JSON object. Do NOT use markdown formatting. Your entire response must be only the raw JSON content.
     **LATEX & BACKSLASHES:** For any LaTeX formulas, you MUST use double backslashes for the commands in your JSON string (e.g., use "\\\\tau" instead of "\\tau"). This ensures the JSON is valid and the backslash is preserved after parsing.
@@ -1235,11 +1649,8 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
       : userPrompt;
 
     try {
-        const useCheap = params.useCheapModel !== false; // Default to true
-        const modelName = useCheap ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview';
-        const thinkingConfig = useCheap ? { thinkingLevel: ThinkingLevel.LOW } : { thinkingLevel: ThinkingLevel.HIGH };
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: modelName,
+            model: modelNameVal,
             contents: contents,
             config: {
               systemInstruction,
@@ -1262,7 +1673,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
                   },
                   required: ['guide_html', 'image_prompts']
               },
-              thinkingConfig
+              thinkingConfig: thinkingConfigVal
             },
         }));
         
@@ -1301,6 +1712,9 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
     // Bypassed ensureApiKey check because Study Guide generation uses the Monthly Pro Plan instead of custom user API key
     const languageName = this.getLanguageName(params.language);
     const isRtl = ['ar', 'ku_sorani', 'ku_badini'].includes(params.language);
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
+    const modelNameVal = useCheap ? this.liteModel : this.proModel;
+    const thinkingConfigVal = { thinkingLevel: ThinkingLevel.LOW };
 
     const systemInstruction = `You are an expert educator creating study materials. Your output MUST be a single, valid JSON object. Do NOT use markdown formatting. Your entire response must be only the raw JSON content.
     **LATEX & BACKSLASHES:** For any LaTeX formulas, you MUST use double backslashes for the commands in your JSON string (e.g., use "\\\\tau" instead of "\\tau"). This ensures the JSON is valid and the backslash is preserved after parsing.
@@ -1387,11 +1801,8 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
       : userPrompt;
 
     try {
-        const useCheap = params.useCheapModel !== false; // Default to true
-        const modelName = useCheap ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview';
-        const thinkingConfig = useCheap ? { thinkingLevel: ThinkingLevel.LOW } : { thinkingLevel: ThinkingLevel.HIGH };
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: modelName,
+            model: modelNameVal,
             contents: contents,
             config: {
               systemInstruction,
@@ -1414,7 +1825,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
                   },
                   required: ['guide_html', 'image_prompts']
               },
-              thinkingConfig
+              thinkingConfig: thinkingConfigVal
             },
         }));
         
@@ -1453,6 +1864,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
     // Bypassed ensureApiKey check because Study Guide generation uses the Monthly Pro Plan instead of custom user API key
     const languageName = this.getLanguageName(params.language);
     const isRtl = ['ar', 'ku_sorani', 'ku_badini'].includes(params.language);
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
 
     const systemInstruction = `You are an expert educator and visual designer. Your output MUST be a single, valid JSON object. Do NOT use markdown formatting. Your entire response must be only the raw JSON content.`;
 
@@ -1493,7 +1905,7 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: params.useCheapModel !== false ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview',
+            model: useCheap ? 'gemini-3-flash-preview' : this.proModel,
             contents: userPrompt,
             config: {
               systemInstruction,
@@ -1607,9 +2019,9 @@ Your entire output must consist **ONLY** of the extracted content (text, formula
 
     try {
       const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: this.proModel,
         contents: prompt,
-        config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+        config: { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } }
       }));
       return response.text.trim();
     } catch (error) {
@@ -1654,7 +2066,7 @@ The final output must be only a JSON array, with no other text, comments, or mar
     let jsonStrToParse = '';
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: this.proModel,
             contents: userPrompt,
             config: {
                 systemInstruction: systemInstruction,
@@ -1724,11 +2136,11 @@ Your response MUST be in ${languageName}.
 
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: this.proModel,
             contents: userPrompt,
             config: { 
                 systemInstruction,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+                thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
             },
         }));
         return response.text.trim();
@@ -1742,6 +2154,7 @@ Your response MUST be in ${languageName}.
     await this.ensureApiKey();
     const languageName = this.getLanguageName(params.language);
     const isRtl = ['ar', 'ku_sorani', 'ku_badini'].includes(params.language);
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
     const branchInfo = params.branch ? ` The branch is "${params.branch}".` : '';
 
     const systemInstruction = `You are an expert curriculum designer. Your task is to generate a logical course structure for a given subject. The final output must be only a JSON object matching the provided schema, with no other text or markdown formatting.`;
@@ -1769,13 +2182,13 @@ Your response MUST be in ${languageName}.
     let jsonStrToParse = '';
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: params.useCheapModel !== false ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview',
+            model: useCheap ? 'gemini-3-flash-preview' : this.proModel,
             contents: userPrompt,
             config: {
                 systemInstruction,
                 responseMimeType: 'application/json',
                 responseSchema: this.getCurriculumSchema(),
-                thinkingConfig: { thinkingLevel: params.useCheapModel !== false ? ThinkingLevel.LOW : ThinkingLevel.HIGH }
+                thinkingConfig: { thinkingLevel: useCheap ? ThinkingLevel.LOW : ThinkingLevel.HIGH }
             },
         }));
         jsonStrToParse = this.cleanJsonString(response.text);
@@ -1801,6 +2214,7 @@ Your response MUST be in ${languageName}.
     await this.ensureApiKey();
     const languageName = this.getLanguageName(params.language);
     const isRtl = ['ar', 'ku_sorani', 'ku_badini'].includes(params.language);
+    const useCheap = params.useCheapModel === true; // Default to false (Pro Plan by default)
     const branchInfo = params.branch ? ` The branch is "${params.branch}".` : '';
 
     const systemInstruction = `You are an expert curriculum designer. Your task is to analyze the provided text (likely a syllabus or table of contents) and generate a logical course structure. The final output must be only a JSON object matching the provided schema, with no other text or markdown formatting.`;
@@ -1836,13 +2250,13 @@ Your response MUST be in ${languageName}.
     let jsonStrToParse = '';
     try {
         const response = await this.callGeminiWithRetry(() => this.getAI().models.generateContent({
-            model: params.useCheapModel !== false ? 'gemini-3-flash-preview' : 'gemini-3.1-pro-preview',
+            model: useCheap ? 'gemini-3-flash-preview' : this.proModel,
             contents: userPrompt,
             config: {
                 systemInstruction,
                 responseMimeType: 'application/json',
                 responseSchema: this.getCurriculumSchema(),
-                thinkingConfig: { thinkingLevel: params.useCheapModel !== false ? ThinkingLevel.LOW : ThinkingLevel.HIGH }
+                thinkingConfig: { thinkingLevel: useCheap ? ThinkingLevel.LOW : ThinkingLevel.HIGH }
             },
         }));
         jsonStrToParse = this.cleanJsonString(response.text);

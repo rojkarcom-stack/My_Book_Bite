@@ -206,10 +206,10 @@ type ExplanationMode = 'simple' | 'analogy' | 'real-world';
               <!-- Spaced Repetition Buttons (Only visible on back) -->
               <div class="flex gap-4 mt-auto w-full" (click)="$event.stopPropagation()">
                 <button (click)="markFlashcard('needs-review')" class="flex-1 py-2 px-4 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 font-semibold transition">
-                  Needs Review
+                  {{ t.translate('student.needsReview') || 'Needs Review' }}
                 </button>
                 <button (click)="markFlashcard('got-it')" class="flex-1 py-2 px-4 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 font-semibold transition">
-                  Got It
+                  {{ t.translate('student.gotIt') || 'Got It' }}
                 </button>
               </div>
             </div>

@@ -57,7 +57,7 @@ import confetti from 'canvas-confetti';
         <span class="text-4xl font-black text-slate-800 dark:text-white font-heading leading-none">
           {{ score() }}<span class="text-xl font-bold text-slate-400 dark:text-slate-500">/{{ totalQuestions }}</span>
         </span>
-        <span class="text-[10px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-1.5">Score</span>
+        <span class="text-[10px] font-extrabold text-slate-400 dark:text-slate-500 uppercase tracking-widest mt-1.5">{{ t.translate('student.score') || 'Score' }}</span>
       </div>
     </div>
     
@@ -111,7 +111,7 @@ import confetti from 'canvas-confetti';
                   [class.dark:bg-rose-950/20]="!result.isCorrect"
                   [class.dark:text-rose-400]="!result.isCorrect">
               <span class="w-1.5 h-1.5 rounded-full" [class.bg-emerald-500]="result.isCorrect" [class.bg-rose-500]="!result.isCorrect"></span>
-              {{ result.isCorrect ? 'Correct' : 'Needs Review' }}
+              {{ result.isCorrect ? (t.translate('student.resultsCorrect') || 'Correct') : (t.translate('student.needsReview') || 'Needs Review') }}
             </span>
           </div>
           

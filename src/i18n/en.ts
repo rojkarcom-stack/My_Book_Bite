@@ -13,8 +13,31 @@ export const en = {
   close: 'Close',
   
   // Language Selector
-  welcomeToApp: 'Welcome to Classroom Quiz!',
+  welcomeToApp: 'Welcome to School Quiz Pro!',
   selectYourLanguage: 'Please select your language to continue.',
+
+  roleSelector: {
+    hub: '🔑 Role Selection Hub',
+    welcome: 'Welcome!',
+    selectYourRole: 'Please select your role to get started.',
+    studentDesc: 'Practice interactive multi-chapter exams with detailed AI feedback.',
+    practice: 'Practice',
+    teacherDesc: 'Construct materials, manage score archives & generate grades.',
+    instruct: 'Instruct',
+    studyGuidesDesc: 'Download PDF chapters, explore terms, and trigger smart summaries.',
+    browse: 'Browse',
+    progressDesc: 'View statistical graphs, correct prior errors & claim digital badges.',
+    analyse: 'Analyse',
+    adminDesc: 'Administrative desk: Manage curriculum mappings and official database questions.',
+    console: 'Console',
+    signOutSecurely: 'Sign Out Securely',
+  },
+  header: {
+    studentSpace: 'Student Space',
+    tokens: '{{count}} Tokens',
+    pro: 'PRO',
+    free: 'FREE',
+  },
 
   // Theme
   theme: {
@@ -25,10 +48,10 @@ export const en = {
 
   // Landing Page
   landing: {
-    appName: 'Classroom Quiz',
+    appName: 'School Quiz Pro',
     title: {
       part1: 'Unlock Your Potential with',
-      part2: 'Classroom Quiz'
+      part2: 'School Quiz Pro'
     },
     subtitle: 'An engaging, AI-powered quiz platform for students from grade 1 to 12. Learn, practice, and excel with confidence.',
     getStarted: 'Get Started Now',
@@ -50,7 +73,7 @@ export const en = {
         description: 'Supports multiple languages to cater to a diverse student base.'
       }
     },
-    footer: '© 2024 Classroom Quiz App. All rights reserved.'
+    footer: '© 2026 School Quiz Pro App. All rights reserved.'
   },
 
   // Auth Page
@@ -102,7 +125,9 @@ export const en = {
     selectYourBranch: 'Select Your Branch',
     youSelectedGrade: 'You\'ve selected Grade {{grade}}. Now, please choose your branch.',
     scientific: 'Scientific',
+    scientificDesc: 'Mathematics, Physics, Chemistry, Biology and general scientific methodologies.',
     literary: 'Literary',
+    literaryDesc: 'Literature, History, Philosophy, Social Sciences and linguistic fields.',
     selectASubject: 'Select a Subject',
     gradeSubjects: 'Grade {{grade}} subjects.',
     noSubjectsAvailable: 'No subjects available for this grade yet.',
@@ -148,6 +173,8 @@ export const en = {
     correct: 'Correct!',
     incorrect: 'Incorrect!',
     premium: 'Premium',
+    billing: 'Billing',
+    billingTitle: 'Premium Access Status',
     premiumTooltip: 'This content requires a premium subscription.',
     studyGuides: 'Study Guides',
     browseGuides: 'Browse Study Guides',
@@ -196,6 +223,42 @@ export const en = {
     hintLoading: 'Getting a hint...',
     hintError: 'Could not get a hint.',
     lifelinesDisabled: 'Lifelines are disabled in Test Mode.',
+    unlock: 'Unlock',
+    gotIt: 'Got It',
+    needsReview: 'Needs Review',
+    resultsCorrect: 'Correct',
+    streak: 'Streak',
+    submitAnswer: 'Submit Answer',
+    finishPractice: 'Finish Practice',
+    score: 'Score',
+    studyMaterial: 'Study Material',
+    generalBranch: 'General / No Branch',
+    subject: 'subject',
+    subjects: 'subjects',
+    guide: 'guide',
+    guides: 'guides',
+    proActive: '💎 Pro Account Active',
+    freeStandard: 'Free Standard Account',
+    upgrade: 'Upgrade',
+    registeredAccount: 'Student Profile',
+    tokenWallet: 'Learning Wallet',
+    available: 'Available',
+    proTokensCount: '{{count}} Pro Tokens',
+    redeemToken: 'Redeem Token',
+    addProTokens: 'Add Pro Tokens',
+    walletDesc: 'Every 29.9 redeemable tokens unlocks any single grade curriculum forever across all subjects and languages including Arabic and Kurdish.',
+    loadingDashboardAnalytics: 'Loading Dashboard Analytics...',
+    noHistoryDesc: 'Complete your first assessment to unlock detailed dashboard analysis and performance graphs.',
+    dashboardDesc: 'Monitor your accomplishments, identify focus topics, and review historic test results.',
+    browseGuidesDesc: 'Select a grade, expand a branch, and select a subject to browse chapters and study guides.',
+    lifelinesCustom: {
+      fiftyFifty: '🌓 Eliminate 50/50',
+      hint: '💡 Gemini Hint',
+      geminiTitle: 'Gemini Strategic Lifeline',
+      generating: 'Generating helpful context...',
+      deepBreakdown: 'Gemini Deep AI Breakdown',
+      consulting: 'Consulting school archives & translating step-by-step logic...'
+    }
   },
 
   teacher: {
@@ -298,7 +361,16 @@ export const en = {
       permissionsSubtitle: 'Manage which subjects this user has premium access to.',
       currentAccess: 'Current Access',
       grantNewAccess: 'Grant New Access',
+      addUserBtn: 'Add User',
+      addUserTitle: 'Add New User Manually',
+      addUserSubtitle: 'Create a new user with custom credentials, allowed languages/grades, and role privileges.',
+      userRole: 'System Role',
+      isAdminUser: 'Is Administrator?',
+      languages: 'Allowed Languages',
+      grades: 'Allowed Grades',
       grantAccess: 'Grant Access',
+      grantAccessSubtitle: 'Grant a user premium access to a specific subject for a set duration.',
+      duration: 'Duration (Days)',
       savePermissions: 'Save Permissions',
       revokePermissions: 'Revoke Selected',
       revoking: 'Revoking...',

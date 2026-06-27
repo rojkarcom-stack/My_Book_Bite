@@ -1,9 +1,10 @@
 
 
-import { Component, ChangeDetectionStrategy, inject, computed } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, computed, HostListener, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 import { QuizService } from './services/quiz.service';
+import { SupabaseService } from './services/supabase.service';
 import { TranslationService } from './services/translation.service';
 import { QuizView } from './models';
 
@@ -30,6 +31,7 @@ import { StudentStudyGuideComponent } from './components/student-study-guide/stu
 import { StudentBillingComponent } from './components/billing/billing.component';
 import { TeacherExamGeneratorComponent } from './components/teacher-exam-generator/teacher-exam-generator.component';
 import { PrintableExamComponent } from './components/printable-exam/printable-exam.component';
+import { SubscriptionSuccessComponent } from './components/subscription-success/subscription-success.component';
 
 
 @Component({
@@ -57,9 +59,22 @@ import { PrintableExamComponent } from './components/printable-exam/printable-ex
     StudentBillingComponent,
     TeacherExamGeneratorComponent,
     PrintableExamComponent,
+    SubscriptionSuccessComponent,
   ],
   template: `
-    <main class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-50 min-h-screen font-sans relative">
+    <style>
+      @media print {
+        body { display: none !important; }
+        * { display: none !important; }
+      }
+      .no-select {
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+    </style>
+    <main class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-50 min-h-screen font-sans relative no-select">
       @if (isLoading()) {
         <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-indigo-900 via-slate-900 to-sky-900 text-white animate-fade-in">
           <div class="flex items-center gap-4 mb-4 animate-fade-in-up" style="animation-delay: 0.1s;">
@@ -96,66 +111,69 @@ import { PrintableExamComponent } from './components/printable-exam/printable-ex
           @if (isLoggedInView()) {
             <app-header />
           }
-          @switch (quizService.view()) {
-            @case ('language_select') {
-              <app-language-selector />
+            @switch (quizService.view()) {
+              @case ('language_select') {
+                <app-language-selector />
+              }
+              @case ('landing') {
+                <app-landing-page />
+              }
+              @case ('auth') {
+                <app-auth />
+              }
+              @case ('role_select') {
+                <app-role-selector />
+              }
+              @case ('admin') {
+                <app-admin />
+              }
+              @case ('admin_login') {
+                <app-admin-login />
+              }
+              @case ('student_grade_select') {
+                <app-student-grade-selector />
+              }
+              @case ('student_branch_select') {
+                <app-student-branch-selector />
+              }
+              @case ('student_subject_select') {
+                <app-student-subject-selector />
+              }
+              @case ('student_topic_selector') {
+                <app-student-topic-selector />
+              }
+              @case ('student_quiz') {
+                <app-student-quiz />
+              }
+              @case ('student_results') {
+                <app-student-results />
+              }
+              @case ('student_dashboard') {
+                <app-student-dashboard />
+              }
+              @case ('student_study_guide_browse') {
+                <app-student-study-browse />
+              }
+              @case ('student_study_guide') {
+                <app-student-study-guide />
+              }
+              @case ('student_billing') {
+                <app-student-billing />
+              }
+              @case ('subscription_success') {
+                <app-subscription-success />
+              }
+              @case ('teacher_exam_generator') {
+                <app-teacher-exam-generator />
+              }
+              @case ('teacher_exam_preview') {
+                <app-printable-exam />
+              }
+              @default {
+                <app-language-selector />
+              }
             }
-            @case ('landing') {
-              <app-landing-page />
-            }
-            @case ('auth') {
-              <app-auth />
-            }
-            @case ('role_select') {
-              <app-role-selector />
-            }
-            @case ('admin') {
-              <app-admin />
-            }
-            @case ('admin_login') {
-              <app-admin-login />
-            }
-            @case ('student_grade_select') {
-              <app-student-grade-selector />
-            }
-            @case ('student_branch_select') {
-              <app-student-branch-selector />
-            }
-            @case ('student_subject_select') {
-              <app-student-subject-selector />
-            }
-            @case ('student_topic_selector') {
-              <app-student-topic-selector />
-            }
-            @case ('student_quiz') {
-              <app-student-quiz />
-            }
-            @case ('student_results') {
-              <app-student-results />
-            }
-            @case ('student_dashboard') {
-              <app-student-dashboard />
-            }
-            @case ('student_study_guide_browse') {
-              <app-student-study-browse />
-            }
-            @case ('student_study_guide') {
-              <app-student-study-guide />
-            }
-            @case ('student_billing') {
-              <app-student-billing />
-            }
-            @case ('teacher_exam_generator') {
-              <app-teacher-exam-generator />
-            }
-            @case ('teacher_exam_preview') {
-              <app-printable-exam />
-            }
-            @default {
-              <app-language-selector />
-            }
-          }
-        </div>
+         </div>
       }
       <app-toast></app-toast>
 
@@ -187,9 +205,97 @@ import { PrintableExamComponent } from './components/printable-exam/printable-ex
 })
 export class AppComponent {
   quizService = inject(QuizService);
+  supabaseService = inject(SupabaseService);
   t = inject(TranslationService);
   isLoading = this.quizService.isLoading;
   coreDataLoadError = this.quizService.coreDataLoadError;
+
+
+
+  @HostListener('window:popstate', ['$event'])
+  onPopState(event: any) {
+    if (event.state && event.state.view) {
+      // Direct navigation to the previous state's view
+      this.quizService.view.set(event.state.view);
+    } else {
+      // Fallback to internal goBack logic if state is missing
+      this.quizService.goBack();
+    }
+  }
+
+  constructor() {
+    // Global event listeners for security
+    this.setupSecurityListeners();
+    this.setupVisitorTracking();
+  }
+
+  private setupVisitorTracking() {
+    // Run an effect tracking user identity updates to report visits to server
+    effect(() => {
+      const user = this.supabaseService.currentUser();
+      const lang = this.quizService.selectedLanguage() || 'en';
+      
+      try {
+        let visitorId = localStorage.getItem('school_quiz_visitor_id');
+        if (!visitorId) {
+          visitorId = 'v_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+          localStorage.setItem('school_quiz_visitor_id', visitorId);
+        }
+        
+        const payload = {
+          visitorId,
+          language: lang,
+          email: user?.email || 'Anonymous Student'
+        };
+
+        fetch('/api/analytics/track-visit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).catch(err => {
+          // ignore background report failures
+        });
+      } catch (e) {
+        console.warn('LocalStorage non-writable in iframe sandbox:', e);
+      }
+    });
+  }
+
+  private setupSecurityListeners() {
+    // Disable right-click
+    document.addEventListener('contextmenu', (e) => {
+      if (this.quizService.isAdmin()) return;
+      e.preventDefault();
+    });
+
+    // Disable common copy/screenshot keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (this.quizService.isAdmin()) return;
+
+      const forbiddenKeys = ['KeyC', 'KeyU', 'KeyP', 'KeyS', 'KeyI', 'KeyJ', 'F12'];
+      const isModifier = e.ctrlKey || e.metaKey;
+      
+      if (isModifier && forbiddenKeys.includes(e.code)) {
+        e.preventDefault();
+      }
+
+      // Block PrintScreen
+      if (e.key === 'PrintScreen') {
+        e.preventDefault();
+        navigator.clipboard.writeText(''); // Clear clipboard immediately
+      }
+    });
+
+    // Disable copy/cut/paste events
+    document.addEventListener('copy', (e) => {
+      if (this.quizService.isAdmin()) return;
+      e.preventDefault();
+    });
+    document.addEventListener('cut', (e) => {
+      if (this.quizService.isAdmin()) return;
+      e.preventDefault();
+    });
+  }
 
   isLoggedInView = computed(() => {
     const currentView = this.quizService.view();
@@ -199,7 +305,7 @@ export class AppComponent {
       'student_topic_selector', 'student_quiz',
       'student_results', 'student_dashboard',
       'student_study_guide_browse', 'student_study_guide',
-      'teacher_exam_generator', 'teacher_exam_preview'
+      'teacher_exam_generator', 'teacher_exam_preview', 'subscription_success'
     ];
     return loggedInViews.includes(currentView);
   });

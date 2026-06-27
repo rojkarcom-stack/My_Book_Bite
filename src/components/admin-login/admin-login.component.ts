@@ -73,6 +73,17 @@ export class AdminLoginComponent {
     try {
       const { email, password } = this.loginForm.value;
       await this.supabase.signInWithPassword(email!, password!);
+      
+      // Double check admin status before granting access
+      const isAdmin = await this.supabase.isAdmin();
+      
+      if (!isAdmin) {
+        // Not an admin, sign out
+        await this.supabase.signOut();
+        this.errorMessage.set('Only administrators are allowed to login here.');
+        return;
+      }
+      
       this.quizService.view.set('admin');
     } catch (error: any) {
       this.errorMessage.set(error.message || 'An unknown error occurred.');

@@ -1,13 +1,112 @@
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="scroll-smooth">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Classroom Quiz App</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, viewport-fit=cover">
+  
+  <!-- Primary Meta Tags -->
+  <title>School Quiz Pro — AI-Powered Interactive Curriculums & Quizzes</title>
+  <meta name="title" content="School Quiz Pro — AI-Powered Interactive Curriculums & Quizzes">
+  <meta name="description" content="Engaging K-12 curriculum companion. Instant AI generated study guides, practice quizzes, achievements, and instant tutoring support across English, Arabic, and Kurdish.">
+  <meta name="keywords" content="school, quiz, interactive, curriculum, study guide, AI explanation, k12 learning, science, sorani, arab, badini">
+  <meta name="robots" content="index, follow">
+  <meta name="language" content="English">
+  <meta name="author" content="School Quiz Pro Team">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://school-quiz-pro.web.app/">
+  <meta property="og:title" content="School Quiz Pro — AI-Powered Interactive Curriculums & Quizzes">
+  <meta property="og:description" content="An engaging, curriculum-aligned AI exam prep platform for student grades 1 to 12. Instant multilingual support.">
+  <meta property="og:image" content="https://picsum.photos/seed/schoolquiz/1200/630">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://school-quiz-pro.web.app/">
+  <meta property="twitter:title" content="School Quiz Pro — AI-Powered Interactive Curriculums & Quizzes">
+  <meta property="twitter:description" content="An engaging, curriculum-aligned AI exam prep platform for student grades 1 to 12. Instant multilingual support.">
+  <meta property="twitter:image" content="https://picsum.photos/seed/schoolquiz/1200/630">
+
+  <!-- Mobile App shell optimizations -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SchoolQuizPro">
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- Preconnect to Google Fonts and resources -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-  <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+
+  <style>
+    /* Premium aesthetics stylesheet customization */
+    ::selection {
+      background-color: rgba(79, 70, 229, 0.2);
+      color: inherit;
+    }
+    
+    /* Modern Custom Scrollbar across all main layout cards and screen */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(156, 163, 175, 0.35);
+      border-radius: 9999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(156, 163, 175, 0.55);
+      border-radius: 9999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+
+    /* Seamless scrollbar theme matching in dark-mode class */
+    .dark ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 9999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .dark ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 9999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+
+    /* Fluid elements interactive focus helper */
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+    }
+  </style>
+
+  <script>
+    (function (window, document, tag, url, name) {
+        window['FreemiusGlobalName'] = name;
+        if (window[name]) return;
+        var q = [];
+        window[name] = function () {
+            q.push(arguments);
+        };
+        window[name].q = q;
+        window[name].l = 1 * new Date();
+        var script = document.createElement(tag);
+        var firstScript = document.getElementsByTagName(tag)[0];
+        script.async = 1;
+        script.src = url;
+        script.crossOrigin = 'anonymous';
+        firstScript.parentNode.insertBefore(script, firstScript);
+    })(window, document, 'script', 'https://checkout.freemius.com/checkout.min.js', 'Freemius');
+  </script>
   <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
   <script>
     tailwind.config = {
@@ -112,16 +211,14 @@
   </script>
   <script>
     // These will be replaced by the server in production or can be set here for dev
-    window.GEMINI_API_KEY = window.GEMINI_API_KEY || '';
     window.SUPABASE_URL = window.SUPABASE_URL || '';
     window.SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY || '';
     
     // Global constants for compatibility with TypeScript declarations
-    var GEMINI_API_KEY = window.GEMINI_API_KEY;
     var SUPABASE_URL = window.SUPABASE_URL;
     var SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;
   </script>
-  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" crossorigin="anonymous"></script>
   <script type="importmap">
 {
   "imports": {
@@ -150,12 +247,19 @@
 <link rel="stylesheet" href="/index.css">
 </head>
 <body>
-  <app-root></app-root>
+  <!-- Premium Glowing Architectural Backdrops -->
+  <div class="fixed top-0 left-1/4 -translate-x-1/2 w-[500px] h-[500px] rounded-full bg-gradient-to-tr from-indigo-500/8 via-sky-500/5 to-transparent dark:from-indigo-600/5 dark:via-violet-600/3 dark:to-transparent blur-3xl pointer-events-none z-0"></div>
+  <div class="fixed bottom-10 right-1/4 translate-x-1/2 w-[450px] h-[450px] rounded-full bg-gradient-to-br from-violet-500/8 via-rose-500/5 to-transparent dark:from-violet-600/5 dark:via-indigo-600/3 dark:to-transparent blur-3xl pointer-events-none z-0"></div>
+  <div class="fixed top-1/3 right-10 w-96 h-96 rounded-full bg-indigo-500/4 dark:bg-indigo-500/2 blur-3xl pointer-events-none z-0"></div>
+
+  <app-root class="relative z-10"></app-root>
   <script>
-    const script = document.createElement('script');
-    script.type = 'module';
-    script.src = `index.tsx?v=${new Date().getTime()}`;
-    document.body.appendChild(script);
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('ais-dev')) {
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = `index.tsx?v=${new Date().getTime()}`;
+      document.body.appendChild(script);
+    }
   </script>
 </body>
 </html>
